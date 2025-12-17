@@ -1,0 +1,1654 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2PS งานตรวจดอกหญ้า</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- HTML5 QR Code -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <!-- Custom Styles for Scrollbar -->
+    <style>
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        /* Hide scrollbar for IE, Edge and Firefox */
+        .no-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
+        body { font-family: 'Sarabun', sans-serif; }
+    </style>
+    <!-- Import Google Font for better Thai support (Optional) -->
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 text-gray-900 min-h-screen font-sans">
+
+    <!-- App Container (Responsive) -->
+    <div id="app-container" class="w-full min-h-screen bg-white relative flex flex-col mx-auto shadow-xl">
+        <!-- Content will be injected here by JavaScript -->
+    </div>
+
+    <!-- Firebase Configuration & Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        // Added 'update' to imports
+        import { getDatabase, ref, push, onValue, remove, set, update } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+
+        // --- Config ---
+        const DATABASE_URL = "https://dokyaa-6339a-default-rtdb.asia-southeast1.firebasedatabase.app/";
+        
+        // Use global var provided by environment or fallback
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+             // Fallback for local testing if needed, but usually provided by env
+             apiKey: "YOUR_API_KEY",
+             authDomain: "YOUR_PROJECT.firebaseapp.com",
+             databaseURL: DATABASE_URL,
+             projectId: "YOUR_PROJECT_ID",
+             storageBucket: "YOUR_PROJECT.appspot.com",
+             messagingSenderId: "SENDER_ID",
+             appId: "APP_ID"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getDatabase(app, DATABASE_URL);
+
+        // --- State Management ---
+        const state = {
+            user: null,
+            isAdmin: false,
+            currentScreen: 'login',
+            editingId: null, // New: Track which ID is being edited
+            data: {
+                users: [],
+                inspections: [],
+                locations: [],
+                stages: []
+            },
+            inspection: {
+                location: null,
+                stage: null,
+                vin: null,
+                area: null,
+                subPart: null,
+                defects: {},
+                notes: {},
+                completed: {},
+                editHistory: [] // New: Track edit history
+            },
+            scanner: {
+                instance: null,
+                isScanning: false,
+                facingMode: 'environment'
+            },
+            filters: {
+                jobDate: new Date().toISOString().split('T')[0],
+                reportDate: new Date().toISOString().split('T')[0],
+                summaryType: 'daily', // daily, monthly
+                summaryDate: new Date().toISOString().split('T')[0]
+            }
+        };
+
+        // --- Constants ---
+        const INSPECTION_AREAS = [
+            { 
+                id: 1, 
+                en: "Under bonnet", 
+                th: "ใต้ฝากระโปรงหน้า",
+                subparts: [
+                    { id: 'insulator', en: 'Insulator', th: 'แผ่นกันความร้อน' },
+                    { id: 'hood_striker', en: 'Hood Striker', th: 'เหล็กยึดฝากระโปรงหน้า' },
+                    { id: 'bonnet_bracket', en: 'Bonnet Bracket', th: 'เหล็กค้ำฝากระโปรงหน้า' }
+                ]
+            },
+            { 
+                id: 2, 
+                en: "Engine room", 
+                th: "ห้องเครื่องยนต์",
+                subparts: [
+                    { id: 'battery_core', en: 'Battery Core', th: 'ขั้วแบตเตอรี่' },
+                    { id: 'wire_engine', en: 'Wire', th: 'สายไฟ' },
+                    { id: 'hood_lock', en: 'Hood Lock', th: 'ตะขอเกี่ยวฝากระโปรงหน้า' }
+                ]
+            },
+            { 
+                id: 3, 
+                en: "Door", 
+                th: "ประตู",
+                subparts: [
+                    { id: 'door_panel', en: 'Door Panel', th: 'ประตู' },
+                    { id: 'door_seal', en: 'Door Seal', th: 'ขอบยางประตู' },
+                    { id: 'seal_opening', en: 'Seal Opening', th: 'ขอบยางด้านใน' }
+                ]
+            },
+            { 
+                id: 4, 
+                en: "Wheel", 
+                th: "ซุ้มล้อ",
+                subparts: [
+                    { id: 'wheel_house', en: 'Wheel house', th: 'ขอบแก้ม' },
+                    { id: 'side_stairs', en: 'Side Stairs', th: 'บันไดข้าง' },
+                    { id: 'alloy_wheel', en: 'Alloy Wheel', th: 'แมกซ์' },
+                    { id: 'mud_guard', en: 'Mud Guard', th: 'ล้อ/กันโคลน' }
+                ]
+            },
+            { 
+                id: 5, 
+                en: "Rear body", 
+                th: "ตัวรถสินค้าด้านหลัง",
+                subparts: [
+                    { id: 'rear_glass', en: 'Rear Glass', th: 'กระจกหลัง' },
+                    { id: 'tail_light', en: 'Tail Light', th: 'ไฟท้าย' },
+                    { id: 'bumper_rear', en: 'Bumper', th: 'กันชนหลัง' },
+                    { id: 'exhaust_pipe', en: 'Exhaust Pipe', th: 'ปลายท่อไอเสีย' }
+                ]
+            },
+            { 
+                id: 6, 
+                en: "Body", 
+                th: "ตัวรถสินค้า",
+                subparts: [
+                    { id: 'side_mirror', en: 'Side Mirror', th: 'กระจกมองข้าง' },
+                    { id: 'bonnet_body', en: 'Bonnet', th: 'กระโปรงหน้า' },
+                    { id: 'roof', en: 'Roof', th: 'หลังคา' },
+                    { id: 'box', en: 'Box', th: 'กระบะ' },
+                    { id: 'tail_gate', en: 'Tail Gate / End Cap', th: 'กระโปรงหลัง/ฝาปิดท้าย' }
+                ]
+            },
+            { 
+                id: 7, 
+                en: "Front body", 
+                th: "ตัวรถสินค้าด้านหน้า",
+                subparts: [
+                    { id: 'bumper_front', en: 'Bumper', th: 'กันชนหน้า' },
+                    { id: 'grille', en: 'Grille', th: 'กระจังหน้า' },
+                    { id: 'headlight', en: 'Headlight', th: 'ไฟหน้า' },
+                    { id: 'front_glass', en: 'Front Glass', th: 'กระจกหน้า' },
+                    { id: 'cawl_top', en: 'Cowl Top', th: 'ร่องระบายน้ำใต้กระจกหน้า' }
+                ]
+            },
+            { 
+                id: 8, 
+                en: "Interior", 
+                th: "ภายใน",
+                subparts: [
+                    { id: 'driver_seat', en: 'Driver Seat', th: 'หุ้มเบาะ' },
+                    { id: 'floor_carpet', en: 'Floor Carpet', th: 'พรมด้านคนขับ' }
+                ]
+            },
+            { 
+                id: 9, 
+                en: "Under the car", 
+                th: "ใต้ท้อง",
+                subparts: [
+                    { id: 'wire_under', en: 'Wire', th: 'สายไฟใต้ท้อง' },
+                    { id: 'connection_point', en: 'Connection Point', th: 'จุดเชื่อมต่อ' }
+                ]
+            }
+        ];
+
+        const DEFECT_TYPES = [
+            { name: "ดอกหญ้า", key: "grass" },
+            { name: "แมลง", key: "insect" },
+            { name: "มูลนก", key: "bird_drop" }
+        ];
+
+        const DEFAULT_LOCATIONS = ["TERMINAL A1", "TERMINAL A0", "TERMINAL C0"];
+        // Removed "TEST" from stages
+        const DEFAULT_STAGES = ["PRE-LOAD", "FINAL", "YARD"];
+
+        // --- Auth & Data Listeners ---
+        async function initApp() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) {
+                console.error("Auth Error:", e);
+            }
+
+            onValue(ref(db, 'users'), (snapshot) => {
+                const val = snapshot.val();
+                state.data.users = val ? Object.entries(val).map(([k, v]) => ({ id: k, ...v })) : [];
+                render(); 
+            });
+
+            onValue(ref(db, 'inspections'), (snapshot) => {
+                const val = snapshot.val();
+                state.data.inspections = val ? Object.entries(val).map(([k, v]) => ({ id: k, ...v })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) : [];
+                render();
+            });
+
+            onValue(ref(db, 'settings/locations'), (snapshot) => {
+                const val = snapshot.val();
+                state.data.locations = val ? Object.entries(val).map(([k, v]) => ({ id: k, ...v })) : [];
+                render();
+            });
+
+            onValue(ref(db, 'settings/stages'), (snapshot) => {
+                const val = snapshot.val();
+                state.data.stages = val ? Object.entries(val).map(([k, v]) => ({ id: k, ...v })) : [];
+                render();
+            });
+
+            render();
+        }
+
+        // --- Helper: Auto Save Draft ---
+        function saveDraft() {
+            if (!state.user) return; // Don't save if not logged in
+            const draft = { ...state.inspection, _owner: state.user };
+            localStorage.setItem('2ps_draft_inspection', JSON.stringify(draft));
+        }
+
+        function clearDraft() {
+            localStorage.removeItem('2ps_draft_inspection');
+        }
+
+        // --- Render Functions ---
+        const container = document.getElementById('app-container');
+
+        function render() {
+            container.innerHTML = ''; 
+            
+            if (state.currentScreen !== 'login' && state.currentScreen !== 'scanner') {
+                container.appendChild(createHeader());
+            }
+
+            const content = document.createElement('div');
+            content.className = "flex-1 overflow-y-auto no-scrollbar w-full";
+            
+            switch(state.currentScreen) {
+                case 'login': content.appendChild(renderLogin()); break;
+                case 'main': content.appendChild(renderMainMenu()); break;
+                case 'admin_dashboard': content.appendChild(renderAdminDashboard()); break;
+                case 'select_location': content.appendChild(renderLocationSelector()); break;
+                case 'scanner': content.appendChild(renderScanner()); break;
+                case 'inspection_list': content.appendChild(renderInspectionList()); break;
+                case 'inspection_detail': content.appendChild(renderInspectionDetail()); break;
+                case 'job_list': content.appendChild(renderJobList()); break;
+                default: content.appendChild(renderLogin());
+            }
+            container.appendChild(content);
+            lucide.createIcons();
+        }
+
+        // --- Component Builders ---
+
+        function createHeader() {
+            const div = document.createElement('div');
+            div.className = `w-full p-4 shadow-md sticky top-0 z-50 text-white ${state.isAdmin ? 'bg-gradient-to-b from-blue-800 to-blue-900' : 'bg-gradient-to-b from-blue-600 to-sky-700'}`;
+            div.innerHTML = `
+                <div class="max-w-7xl mx-auto flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <div class="bg-white/20 p-1 px-2 rounded border border-white/30">
+                            <h1 class="text-2xl font-black tracking-tighter italic">2PS</h1>
+                        </div>
+                        <div class="text-sm leading-tight">
+                            <div class="font-bold">${state.user || 'Guest'}</div>
+                            <div class="${state.isAdmin ? 'text-blue-200' : 'text-blue-100'} text-xs">${state.isAdmin ? 'Administrator' : 'Inspector'}</div>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="btn-profile" class="p-2 rounded transition-colors ${state.isAdmin ? 'bg-blue-700 hover:bg-blue-600 border border-blue-600' : 'bg-blue-500 hover:bg-blue-400'}"><i data-lucide="user" width="20"></i></button>
+                        <button id="btn-logout" class="p-2 rounded transition-colors ${state.isAdmin ? 'bg-blue-700 hover:bg-blue-600 border border-blue-600' : 'bg-blue-500 hover:bg-blue-400'}"><i data-lucide="log-out" width="20"></i></button>
+                    </div>
+                </div>
+            `;
+            div.querySelector('#btn-logout').onclick = handleLogout;
+            return div;
+        }
+
+        function renderLogin() {
+            // Load saved credentials
+            const savedUser = localStorage.getItem('2ps_user') || '';
+            const savedPass = localStorage.getItem('2ps_pass') || '';
+
+            const div = document.createElement('div');
+            div.className = "flex flex-col items-center justify-center min-h-[80vh] p-4 bg-gray-50";
+            div.innerHTML = `
+                <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm border border-gray-200">
+                    <h2 class="text-xl font-bold text-gray-700 mb-6 text-center border-b pb-4">2PS งานตรวจดอกหญ้า</h2>
+                    <form id="login-form" class="space-y-4">
+                        <div>
+                            <label class="block text-gray-600 mb-1 text-sm">ชื่อผู้ใช้งาน :</label>
+                            <input type="text" id="username" value="${savedUser}" class="w-full border border-gray-300 p-2 rounded focus:outline-none focus:border-blue-500" placeholder="Username">
+                        </div>
+                        <div>
+                            <label class="block text-gray-600 mb-1 text-sm">รหัสผ่าน :</label>
+                            <input type="password" id="password" value="${savedPass}" class="w-full border border-gray-300 p-2 rounded focus:outline-none focus:border-blue-500" placeholder="Password">
+                        </div>
+                        <div class="flex items-center gap-2 mt-2">
+                            <input type="checkbox" id="remember-me" ${savedUser ? 'checked' : ''} class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 border-gray-300">
+                            <label for="remember-me" class="text-sm text-gray-600 cursor-pointer">จำฉันในระบบ</label>
+                        </div>
+                        <div id="login-error" class="text-red-500 text-sm text-center hidden mt-2"></div>
+                        <button type="submit" class="w-full bg-blue-500 text-white p-2 rounded font-bold hover:bg-blue-600 transition-colors mt-6">เข้าสู่ระบบ</button>
+                    </form>
+                </div>
+            `;
+            div.querySelector('#login-form').onsubmit = (e) => {
+                e.preventDefault();
+                const remember = div.querySelector('#remember-me').checked;
+                handleLogin(div.querySelector('#username').value, div.querySelector('#password').value, remember);
+            };
+            return div;
+        }
+
+        function renderMainMenu() {
+            const div = document.createElement('div');
+            div.className = "p-4 w-full max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6 mt-4 md:mt-10";
+            div.innerHTML = `
+                <button id="btn-open-job" class="w-full bg-cyan-600 text-white p-8 rounded-xl shadow-lg text-lg font-bold hover:bg-cyan-700 hover:shadow-xl hover:-translate-y-1 transition-all flex items-center justify-center gap-4 h-32 md:h-48">
+                    <div class="bg-white/20 p-4 rounded-full"><i data-lucide="file-text" width="48" height="48"></i></div>
+                    <div class="text-left">
+                        <div class="text-2xl md:text-3xl">เปิดงาน</div>
+                        <div class="text-base font-normal opacity-80">เริ่มตรวจรถใหม่</div>
+                    </div>
+                </button>
+                <button id="btn-check-job" class="w-full bg-green-600 text-white p-8 rounded-xl shadow-lg text-lg font-bold hover:bg-green-700 hover:shadow-xl hover:-translate-y-1 transition-all flex items-center justify-center gap-4 h-32 md:h-48">
+                    <div class="bg-white/20 p-4 rounded-full"><i data-lucide="check-circle" width="48" height="48"></i></div>
+                    <div class="text-left">
+                        <div class="text-2xl md:text-3xl">เช็คงาน</div>
+                        <div class="text-base font-normal opacity-80">ดูประวัติย้อนหลัง</div>
+                    </div>
+                </button>
+            `;
+            div.querySelector('#btn-open-job').onclick = () => { 
+                // Reset edit state when starting new job
+                state.editingId = null;
+                state.inspection = {
+                    location: null,
+                    stage: null,
+                    vin: null,
+                    area: null,
+                    subPart: null,
+                    defects: {},
+                    notes: {},
+                    completed: {},
+                    editHistory: []
+                };
+                state.currentScreen = 'select_location'; 
+                render(); 
+            };
+            div.querySelector('#btn-check-job').onclick = () => { state.currentScreen = 'job_list'; render(); };
+            return div;
+        }
+
+        function renderLocationSelector() {
+            const wrapper = document.createElement('div');
+            wrapper.appendChild(renderMainMenu()); 
+
+            const modal = document.createElement('div');
+            modal.className = "fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in";
+            
+            const rawLocs = [...DEFAULT_LOCATIONS.map(n => ({name: n})), ...state.data.locations];
+            const locs = [...new Map(rawLocs.map(item => [item.name, item])).values()];
+
+            const rawStgs = [...DEFAULT_STAGES.map(n => ({name: n})), ...state.data.stages];
+            const stgs = [...new Map(rawStgs.map(item => [item.name, item])).values()];
+
+            modal.innerHTML = `
+                <div class="bg-white w-full max-w-md lg:max-w-lg rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                    <div class="bg-blue-500 p-4 text-white font-bold text-lg text-center shadow-sm">ระบุข้อมูลงานตรวจ</div>
+                    <div class="p-6 space-y-6 overflow-y-auto">
+                        <div>
+                            <label class="flex items-center gap-2 text-gray-700 font-bold mb-2 text-lg"><i data-lucide="map-pin" class="text-blue-500"></i> สถานที่ปฏิบัติงาน</label>
+                            <div class="grid grid-cols-1 gap-2" id="loc-list"></div>
+                        </div>
+                        <div>
+                            <label class="flex items-center gap-2 text-gray-700 font-bold mb-2 text-lg"><i data-lucide="layers" class="text-cyan-500"></i> STAGE</label>
+                            <div class="grid grid-cols-1 gap-2" id="stg-list"></div>
+                        </div>
+                    </div>
+                    <div class="p-4 bg-gray-50 border-t flex gap-3">
+                        <button id="btn-cancel" class="flex-1 py-3 bg-gray-300 rounded-lg text-gray-700 font-bold hover:bg-gray-400">ยกเลิก</button>
+                        <button id="btn-confirm" class="flex-1 py-3 rounded-lg text-white font-bold bg-blue-500 shadow-lg" disabled>ตกลง</button>
+                    </div>
+                </div>
+            `;
+
+            let tempLoc = null;
+            let tempStg = null;
+
+            const updateConfirmBtn = () => {
+                const btn = modal.querySelector('#btn-confirm');
+                if (tempLoc && tempStg) {
+                    btn.disabled = false;
+                    btn.className = "flex-1 py-3 rounded-lg text-white font-bold bg-blue-500 hover:bg-blue-600 shadow-lg";
+                } else {
+                    btn.disabled = true;
+                    btn.className = "flex-1 py-3 rounded-lg text-white font-bold bg-gray-300 cursor-not-allowed";
+                }
+            };
+
+            const locList = modal.querySelector('#loc-list');
+            locs.forEach(l => {
+                const btn = document.createElement('button');
+                btn.className = "p-3 rounded-lg border-2 text-left transition-all border-gray-200 hover:border-blue-300";
+                btn.textContent = l.name;
+                btn.onclick = () => {
+                    tempLoc = l.name;
+                    Array.from(locList.children).forEach(c => c.className = "p-3 rounded-lg border-2 text-left transition-all border-gray-200 hover:border-blue-300");
+                    btn.className = "p-3 rounded-lg border-2 text-left transition-all border-blue-500 bg-blue-50 text-blue-700 font-bold";
+                    updateConfirmBtn();
+                };
+                locList.appendChild(btn);
+            });
+
+            const stgList = modal.querySelector('#stg-list');
+            stgs.forEach(s => {
+                const btn = document.createElement('button');
+                btn.className = "p-3 rounded-lg border-2 text-left transition-all border-gray-200 hover:border-cyan-300 uppercase";
+                btn.textContent = s.name;
+                btn.onclick = () => {
+                    tempStg = s.name;
+                    Array.from(stgList.children).forEach(c => c.className = "p-3 rounded-lg border-2 text-left transition-all border-gray-200 hover:border-cyan-300 uppercase");
+                    btn.className = "p-3 rounded-lg border-2 text-left transition-all border-cyan-500 bg-cyan-50 text-cyan-700 font-bold uppercase";
+                    updateConfirmBtn();
+                };
+                stgList.appendChild(btn);
+            });
+
+            modal.querySelector('#btn-cancel').onclick = () => { state.currentScreen = 'main'; render(); };
+            modal.querySelector('#btn-confirm').onclick = () => {
+                state.inspection.location = tempLoc;
+                state.inspection.stage = tempStg;
+                saveDraft(); // Auto save
+                state.currentScreen = 'scanner';
+                render();
+            };
+
+            wrapper.appendChild(modal);
+            return wrapper;
+        }
+
+        function renderScanner() {
+            const div = document.createElement('div');
+            div.className = "flex flex-col h-full bg-black relative flex-1 min-h-screen";
+            div.innerHTML = `
+                <div class="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-10 bg-gradient-to-b from-black/80 to-transparent text-white pointer-events-none">
+                    <button id="btn-back" class="text-white flex items-center gap-1 bg-black/20 px-4 py-2 rounded backdrop-blur-sm pointer-events-auto hover:bg-black/40">
+                        <i data-lucide="chevron-left"></i> กลับ
+                    </button>
+                    <div class="text-right">
+                        <div class="font-bold text-blue-400 text-xl">${state.inspection.location}</div>
+                        <div class="text-base text-cyan-300 bg-cyan-900/40 px-3 py-1 rounded inline-block mt-1 uppercase">${state.inspection.stage}</div>
+                    </div>
+                </div>
+                <div class="flex-1 bg-gray-900 flex flex-col items-center justify-center relative overflow-hidden p-4">
+                    <div id="reader" class="w-full max-w-lg mx-auto rounded-xl overflow-hidden shadow-2xl hidden border-2 border-white/20"></div>
+                    <div id="placeholder" class="flex flex-col items-center text-gray-400 gap-4">
+                        <i data-lucide="camera" width="64" height="64"></i>
+                        <p class="text-lg">กดปุ่ม "เปิดกล้อง" เพื่อเริ่มสแกน QR Code</p>
+                        <div id="scan-error" class="text-red-500 text-sm hidden"></div>
+                    </div>
+                    <div id="scanning-overlay" class="absolute bottom-32 text-white text-center w-full animate-pulse bg-black/50 p-2 hidden pointer-events-none">กำลังค้นหา QR Code...</div>
+                    <button id="btn-switch-cam" class="absolute top-20 right-4 z-20 pointer-events-auto bg-white/20 backdrop-blur-md p-3 rounded-full text-white hover:bg-white/40 border border-white/30 hidden">
+                        <i data-lucide="rotate-ccw" width="24"></i>
+                    </button>
+                </div>
+                <div class="bg-white p-6 flex justify-around items-center z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+                    <button id="btn-toggle-scan" class="bg-blue-500 text-white px-8 py-4 rounded-xl shadow-lg font-bold flex items-center gap-3 hover:bg-blue-600 w-full max-w-md mx-auto justify-center text-lg transition-transform active:scale-95">
+                        <i data-lucide="camera" width="24"></i> เปิดกล้อง / สแกน
+                    </button>
+                </div>
+            `;
+
+            div.querySelector('#btn-back').onclick = () => { stopScanner(); state.currentScreen = 'main'; render(); };
+            
+            const btnToggle = div.querySelector('#btn-toggle-scan');
+            const readerDiv = div.querySelector('#reader');
+            const placeholderDiv = div.querySelector('#placeholder');
+            const overlayDiv = div.querySelector('#scanning-overlay');
+            const switchBtn = div.querySelector('#btn-switch-cam');
+
+            const startScanner = async () => {
+                try {
+                    if (!state.scanner.instance) {
+                        state.scanner.instance = new Html5Qrcode("reader");
+                    }
+                    readerDiv.classList.remove('hidden');
+                    placeholderDiv.classList.add('hidden');
+                    overlayDiv.classList.remove('hidden');
+                    switchBtn.classList.remove('hidden');
+                    state.scanner.isScanning = true;
+
+                    await state.scanner.instance.start(
+                        { facingMode: state.scanner.facingMode },
+                        { fps: 10, qrbox: { width: 250, height: 250 } },
+                        (decodedText) => {
+                            stopScanner();
+                            
+                            // Check for duplicate VIN in existing data
+                            const existingInspection = state.data.inspections.find(i => i.vin === decodedText);
+
+                            if (existingInspection) {
+                                // Found duplicate
+                                if(confirm(`⚠️ รถคันนี้ (${decodedText}) ตรวจสอบแล้ว!\nต้องการแก้ไขข้อมูลเดิมหรือไม่?`)) {
+                                    // Switch to Edit Mode
+                                    state.editingId = existingInspection.id;
+                                    
+                                    // Deep copy existing data
+                                    state.inspection = JSON.parse(JSON.stringify(existingInspection));
+                                    
+                                    // Ensure optional fields exist
+                                    state.inspection.defects = state.inspection.defects || {};
+                                    state.inspection.notes = state.inspection.notes || {};
+                                    state.inspection.completed = state.inspection.completed || {};
+                                    state.inspection.editHistory = state.inspection.editHistory || [];
+
+                                    saveDraft(); // Auto save
+                                    state.currentScreen = 'inspection_list';
+                                    render();
+                                } else {
+                                    // Cancel, resume scanning
+                                    startScanner();
+                                }
+                            } else {
+                                // New VIN
+                                if(confirm(`ยืนยัน VIN: ${decodedText}`)) {
+                                    state.inspection.vin = decodedText;
+                                    saveDraft(); // Auto save
+                                    state.currentScreen = 'inspection_list';
+                                    render();
+                                } else {
+                                    startScanner(); 
+                                }
+                            }
+                        },
+                        (err) => {} 
+                    );
+
+                    btnToggle.innerHTML = `<i data-lucide="x" width="24"></i> ปิดกล้อง`;
+                    btnToggle.className = "bg-gray-500 text-white px-8 py-4 rounded-xl shadow-lg font-bold flex items-center gap-3 hover:bg-gray-600 w-full max-w-md mx-auto justify-center text-lg transition-transform active:scale-95";
+                    btnToggle.onclick = stopScanner;
+                    lucide.createIcons();
+
+                } catch (err) {
+                    console.error(err);
+                    div.querySelector('#scan-error').textContent = "เปิดกล้องไม่ได้: " + err;
+                    div.querySelector('#scan-error').classList.remove('hidden');
+                }
+            };
+
+            const stopScanner = async () => {
+                if (state.scanner.instance && state.scanner.isScanning) {
+                    await state.scanner.instance.stop();
+                    state.scanner.isScanning = false;
+                    readerDiv.classList.add('hidden');
+                    placeholderDiv.classList.remove('hidden');
+                    overlayDiv.classList.add('hidden');
+                    switchBtn.classList.add('hidden');
+
+                    btnToggle.innerHTML = `<i data-lucide="camera" width="24"></i> เปิดกล้อง / สแกน`;
+                    btnToggle.className = "bg-blue-500 text-white px-8 py-4 rounded-xl shadow-lg font-bold flex items-center gap-3 hover:bg-blue-600 w-full max-w-md mx-auto justify-center text-lg transition-transform active:scale-95";
+                    btnToggle.onclick = startScanner;
+                    lucide.createIcons();
+                }
+            };
+
+            btnToggle.onclick = startScanner;
+
+            switchBtn.onclick = async () => {
+                await stopScanner();
+                state.scanner.facingMode = state.scanner.facingMode === 'environment' ? 'user' : 'environment';
+                startScanner();
+            };
+
+            return div;
+        }
+
+        function renderInspectionList() {
+            const div = document.createElement('div');
+            div.className = "bg-gray-50 min-h-screen pb-20";
+            
+            // Edit Mode Indicator
+            let editBanner = '';
+            if (state.editingId) {
+                editBanner = `
+                    <div class="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 sticky top-16 z-30 shadow-md flex justify-between items-center">
+                        <div>
+                            <p class="font-bold flex items-center gap-2"><i data-lucide="edit-3" width="18"></i> โหมดแก้ไข (Edit Mode)</p>
+                            <p class="text-sm">กำลังแก้ไขข้อมูลของ ${state.inspection.vin}</p>
+                        </div>
+                        <button id="btn-cancel-edit" class="text-sm bg-white border border-orange-300 px-3 py-1 rounded hover:bg-orange-50 text-orange-600">ยกเลิก</button>
+                    </div>
+                `;
+            }
+
+            // Edit History Section
+            let historySection = '';
+            if (state.inspection.editHistory && state.inspection.editHistory.length > 0) {
+                historySection = `
+                    <div class="max-w-7xl mx-auto p-4 mt-4">
+                        <div class="bg-white rounded-lg shadow-sm border p-4">
+                            <h3 class="font-bold text-gray-700 mb-2 flex items-center gap-2"><i data-lucide="history" width="18"></i> ประวัติการแก้ไข</h3>
+                            <div class="divide-y text-sm">
+                                ${state.inspection.editHistory.map(h => `
+                                    <div class="py-2 flex justify-between items-center text-gray-600">
+                                        <span>แก้ไขโดย <span class="font-bold text-blue-600">${h.editor}</span></span>
+                                        <span class="text-xs text-gray-400">${new Date(h.timestamp).toLocaleString('th-TH')}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            div.innerHTML = `
+                <div class="bg-white border-b shadow-sm sticky top-0 z-40">
+                     <div class="max-w-7xl mx-auto p-4 flex justify-between items-center">
+                        <button id="btn-back" class="text-gray-600 font-medium flex items-center gap-1 hover:text-blue-600"><i data-lucide="chevron-left"></i> กลับ</button>
+                        <div class="text-sm text-right text-gray-500">
+                            <div class="font-bold text-gray-700">${state.inspection.location}</div>
+                            <div class="uppercase">${state.inspection.stage}</div>
+                        </div>
+                    </div>
+                </div>
+                ${editBanner}
+                <div class="bg-blue-50 border-b border-blue-100 mb-6">
+                    <div class="max-w-7xl mx-auto p-6">
+                        <div class="text-sm text-gray-500 uppercase tracking-wide">VIN Number</div>
+                        <div class="font-mono font-bold text-3xl text-blue-800 break-all">${state.inspection.vin}</div>
+                    </div>
+                </div>
+
+                <!-- Responsive Grid for Inspection Areas -->
+                <div id="area-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4 max-w-7xl mx-auto mb-8"></div>
+                
+                ${historySection}
+
+                <div class="p-4 flex justify-center pb-24 sticky bottom-0 bg-gradient-to-t from-gray-50 to-transparent pointer-events-none">
+                    <button id="btn-save" class="pointer-events-auto ${state.editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-600 hover:bg-green-700'} text-white px-8 py-4 rounded-xl font-bold shadow-xl w-full max-w-md flex items-center justify-center gap-3 transform active:scale-95 transition-all text-lg">
+                        <i data-lucide="${state.editingId ? 'save' : 'check-circle'}" width="24"></i> ${state.editingId ? 'บันทึกการแก้ไข' : 'บันทึกผลการตรวจ'}
+                    </button>
+                </div>
+            `;
+
+            div.querySelector('#btn-back').onclick = () => { 
+                if(state.editingId) {
+                    // If editing from admin, back goes to admin dashboard
+                    if (state.isAdmin) {
+                        state.currentScreen = 'admin_dashboard';
+                    } else {
+                        state.currentScreen = 'job_list';
+                    }
+                } else {
+                    // Normal mode
+                    state.currentScreen = 'main'; 
+                }
+                render(); 
+            };
+
+            if (div.querySelector('#btn-cancel-edit')) {
+                div.querySelector('#btn-cancel-edit').onclick = () => {
+                    if(confirm('ยกเลิกการแก้ไขและกลับไปหน้าก่อนหน้า?')) {
+                        state.editingId = null;
+                        if (state.isAdmin) {
+                            state.currentScreen = 'admin_dashboard';
+                        } else {
+                            state.currentScreen = 'job_list';
+                        }
+                        render();
+                    }
+                };
+            }
+            
+            const list = div.querySelector('#area-list');
+            INSPECTION_AREAS.forEach(area => {
+                // Calculate completion status
+                let statusClass = "bg-white border-gray-200 hover:border-blue-500"; // Default Gray
+                let statusIconClass = "text-gray-400 group-hover:text-blue-500";
+                
+                const totalSubParts = area.subparts ? area.subparts.length : 0;
+                let completedCount = 0;
+                if (totalSubParts > 0 && state.inspection.completed && state.inspection.completed[area.id]) {
+                    completedCount = Object.keys(state.inspection.completed[area.id]).length;
+                }
+
+                if (totalSubParts > 0) {
+                    if (completedCount === totalSubParts) {
+                        // Green: All completed
+                        statusClass = "bg-green-50 border-green-500 hover:border-green-600";
+                        statusIconClass = "text-green-500";
+                    } else if (completedCount > 0) {
+                        // Yellow: Some completed
+                        statusClass = "bg-yellow-50 border-yellow-400 hover:border-yellow-500";
+                        statusIconClass = "text-yellow-500";
+                    }
+                }
+
+                const btn = document.createElement('button');
+                // Card Style with dynamic background
+                btn.className = `w-full text-left p-6 rounded-xl border shadow-sm transition-all flex justify-between items-center group cursor-pointer ${statusClass}`;
+                btn.innerHTML = `<span class="text-lg text-gray-800 font-bold">${area.en} <br><span class="text-sm font-normal text-gray-500">${area.th}</span></span><i data-lucide="chevron-right" class="${statusIconClass} transition-colors"></i>`;
+                btn.onclick = () => {
+                    state.inspection.area = area;
+                    state.inspection.subPart = null; 
+                    state.currentScreen = 'inspection_detail';
+                    render();
+                };
+                list.appendChild(btn);
+            });
+
+            div.querySelector('#btn-save').onclick = async () => {
+                const isEdit = !!state.editingId;
+                const msg = isEdit ? 'ยืนยันการบันทึกการแก้ไข?' : 'ยืนยันการบันทึกข้อมูล?';
+                
+                if(!confirm(msg)) return;
+
+                const data = {
+                    vin: state.inspection.vin,
+                    location: state.inspection.location,
+                    stage: state.inspection.stage,
+                    user: state.inspection.user || state.user, // Keep original creator if editing
+                    date: state.inspection.date || new Date().toISOString().split('T')[0], // Keep original date
+                    timestamp: state.inspection.timestamp || new Date().toISOString(),
+                    defects: state.inspection.defects || {},
+                    notes: state.inspection.notes || {},
+                    completed: state.inspection.completed || {},
+                    status: 'completed'
+                };
+
+                // Add edit history if editing
+                if (isEdit) {
+                    const history = state.inspection.editHistory || [];
+                    history.push({
+                        editor: state.user,
+                        timestamp: new Date().toISOString()
+                    });
+                    data.editHistory = history;
+                }
+
+                try {
+                    if (isEdit) {
+                        // Update existing record
+                        await update(ref(db, `inspections/${state.editingId}`), data);
+                        alert("บันทึกการแก้ไขเรียบร้อย");
+                        state.editingId = null; // Exit edit mode
+                    } else {
+                        // Create new record
+                        data.user = state.user; // Ensure current user is owner for new records
+                        data.date = new Date().toISOString().split('T')[0];
+                        data.timestamp = new Date().toISOString();
+                        await push(ref(db, 'inspections'), data);
+                        alert("บันทึกสำเร็จ");
+                    }
+                    
+                    clearDraft(); // Clear local draft on success
+
+                    // Reset inspection
+                    state.inspection = { location: null, stage: null, vin: null, area: null, subPart: null, defects: {}, notes: {}, completed: {}, editHistory: [] };
+                    
+                    // Return to main menu, job list, or admin dashboard based on role and edit mode
+                    if (isEdit && state.isAdmin) {
+                        state.currentScreen = 'admin_dashboard';
+                    } else if (isEdit) {
+                        state.currentScreen = 'job_list';
+                    } else {
+                        state.currentScreen = 'main';
+                    }
+                    
+                    render();
+                } catch(e) {
+                    alert("Error: " + e.message);
+                }
+            };
+
+            return div;
+        }
+
+        function renderSubPartList(area) {
+            const div = document.createElement('div');
+            div.className = "bg-gray-50 min-h-screen pb-20";
+            div.innerHTML = `
+                <div class="bg-white border-b shadow-sm sticky top-0 z-40">
+                    <div class="max-w-4xl mx-auto p-4 flex items-center">
+                        <button id="btn-back" class="text-gray-600 font-medium flex items-center gap-1 hover:text-blue-600"><i data-lucide="chevron-left"></i> ย้อนกลับ</button>
+                        <div class="ml-4 font-bold text-gray-700 truncate text-lg">${area.en} / ${area.th}</div>
+                    </div>
+                </div>
+                <div class="p-4 max-w-4xl mx-auto mt-4">
+                    <div class="text-sm text-gray-500 mb-4 font-bold px-1 uppercase">เลือกรายการย่อย (Sub-parts)</div>
+                    <div id="subpart-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                </div>
+            `;
+
+            div.querySelector('#btn-back').onclick = () => { 
+                state.currentScreen = 'inspection_list'; 
+                render(); 
+            };
+
+            const list = div.querySelector('#subpart-list');
+            if(area.subparts) {
+                area.subparts.forEach(part => {
+                    // Check completion
+                    const isCompleted = state.inspection.completed && state.inspection.completed[area.id] && state.inspection.completed[area.id][part.id];
+                    let cardClass = "w-full text-left p-6 bg-white rounded-xl border border-gray-200 shadow-sm hover:border-blue-400 hover:shadow-md transition-all flex justify-between items-center";
+                    let iconClass = "text-gray-400";
+                    
+                    if(isCompleted) {
+                        cardClass = "w-full text-left p-6 bg-green-50 rounded-xl border border-green-500 shadow-sm transition-all flex justify-between items-center";
+                        iconClass = "text-green-500";
+                    }
+
+                    const btn = document.createElement('button');
+                    btn.className = cardClass;
+                    btn.innerHTML = `<span class="font-bold text-gray-800">${part.en} <br><span class="text-sm font-normal text-gray-500">${part.th}</span></span>${isCompleted ? '<i data-lucide="check-circle" class="text-green-500"></i>' : '<i data-lucide="chevron-right" class="text-gray-400"></i>'}`;
+                    btn.onclick = () => {
+                        state.inspection.subPart = part;
+                        render(); 
+                    };
+                    list.appendChild(btn);
+                });
+            } else {
+                list.innerHTML = `<div class="col-span-2 text-center text-gray-400 py-8">ไม่มีรายการย่อย</div>`;
+            }
+
+            return div;
+        }
+
+        function renderInspectionDetail() {
+            const area = state.inspection.area;
+
+            // Check if area has sub-parts and none is selected yet
+            if (area.subparts && !state.inspection.subPart) {
+                return renderSubPartList(area);
+            }
+
+            return renderDefectCounters(area);
+        }
+
+        function renderDefectCounters(area) {
+            const areaId = area.id;
+            const isSubPart = !!state.inspection.subPart;
+            const subPartId = isSubPart ? state.inspection.subPart.id : null;
+            
+            const div = document.createElement('div');
+            div.className = "bg-gray-50 min-h-screen pb-20";
+            
+            let title = `${area.en} / ${area.th}`;
+            if(isSubPart) {
+                title += ` <span class="text-blue-600 mx-1">></span> ${state.inspection.subPart.en}`;
+            }
+
+            div.innerHTML = `
+                <div class="bg-white border-b shadow-sm sticky top-0 z-40">
+                    <div class="max-w-4xl mx-auto p-4 flex items-center">
+                        <button id="btn-back" class="text-gray-600 font-medium flex items-center gap-1 hover:text-blue-600"><i data-lucide="chevron-left"></i> ย้อนกลับ</button>
+                        <div class="ml-4 font-bold text-gray-700 leading-tight truncate flex-1">${title}</div>
+                    </div>
+                </div>
+                <div class="p-4 max-w-4xl mx-auto mt-4 space-y-6">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                        <div class="font-bold text-gray-800 mb-6 pb-2 border-b flex justify-between items-center text-lg">
+                            <span>รายละเอียดความเสียหาย</span>
+                        </div>
+                        <!-- Responsive Grid for Counters -->
+                        <div id="defect-list" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+                        
+                        <div class="mt-8 pt-6 border-t">
+                            <div class="flex flex-col gap-2">
+                                <label class="font-bold text-gray-700 text-sm">หมายเหตุเพิ่มเติม</label>
+                                <textarea id="note-input" rows="3" class="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:border-blue-500 bg-gray-50 transition-colors" placeholder="ระบุรายละเอียด (ถ้ามี)..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-4 flex justify-center pb-24 sticky bottom-0 bg-gradient-to-t from-gray-50 to-transparent pointer-events-none">
+                    <button id="btn-complete-part" class="pointer-events-auto bg-blue-600 text-white px-8 py-4 rounded-xl font-bold shadow-xl hover:bg-blue-700 w-full max-w-md flex items-center justify-center gap-3 transform active:scale-95 transition-all text-lg">
+                        <i data-lucide="save" width="24"></i> บันทึกรายการนี้
+                    </button>
+                </div>
+            `;
+
+            div.querySelector('#btn-back').onclick = () => { 
+                if(isSubPart) {
+                    state.inspection.subPart = null; 
+                    render();
+                } else {
+                    state.currentScreen = 'inspection_list'; 
+                    render(); 
+                }
+            };
+
+            const noteKey = isSubPart ? `${areaId}_${subPartId}` : areaId;
+            const noteInput = div.querySelector('#note-input');
+            noteInput.value = state.inspection.notes[noteKey] || '';
+            noteInput.onchange = (e) => {
+                state.inspection.notes[noteKey] = e.target.value;
+                saveDraft(); // Auto save
+            };
+
+            const list = div.querySelector('#defect-list');
+            DEFECT_TYPES.forEach(type => {
+                if (!state.inspection.defects[areaId]) state.inspection.defects[areaId] = {};
+                
+                let targetObj;
+                if (isSubPart) {
+                    if (!state.inspection.defects[areaId][subPartId]) state.inspection.defects[areaId][subPartId] = {};
+                    targetObj = state.inspection.defects[areaId][subPartId];
+                } else {
+                    targetObj = state.inspection.defects[areaId];
+                }
+
+                if (!targetObj[type.key]) targetObj[type.key] = 0;
+
+                const row = document.createElement('div');
+                row.className = "flex items-center justify-between p-3 bg-gray-50 rounded-lg";
+                row.innerHTML = `
+                    <div class="font-bold text-gray-700 text-lg">${type.name}</div>
+                    <div class="flex items-center gap-4">
+                        <button class="btn-minus w-12 h-12 border-2 border-red-200 text-red-500 rounded-full flex items-center justify-center text-2xl font-bold bg-white hover:bg-red-50 active:scale-95 transition-all">-</button>
+                        <div class="count-display w-12 text-center text-2xl font-bold text-gray-800">${targetObj[type.key]}</div>
+                        <button class="btn-plus w-12 h-12 border-2 border-green-600 bg-green-600 text-white rounded-full flex items-center justify-center text-2xl font-bold hover:bg-green-700 active:scale-95 shadow-md transition-all">+</button>
+                    </div>
+                `;
+                
+                row.querySelector('.btn-minus').onclick = () => {
+                    if (targetObj[type.key] > 0) {
+                        targetObj[type.key]--;
+                        row.querySelector('.count-display').textContent = targetObj[type.key];
+                        saveDraft(); // Auto save
+                    }
+                };
+                row.querySelector('.btn-plus').onclick = () => {
+                    targetObj[type.key]++;
+                    row.querySelector('.count-display').textContent = targetObj[type.key];
+                    saveDraft(); // Auto save
+                };
+
+                list.appendChild(row);
+            });
+
+            // Handle Complete Part
+            div.querySelector('#btn-complete-part').onclick = () => {
+                // Mark as completed
+                if (!state.inspection.completed) state.inspection.completed = {};
+                if (!state.inspection.completed[areaId]) {
+                    state.inspection.completed[areaId] = {};
+                }
+                if (subPartId) {
+                    state.inspection.completed[areaId][subPartId] = true;
+                }
+                
+                // Check if ALL subparts for this area are completed
+                const allSubParts = area.subparts || [];
+                const completedMap = state.inspection.completed[areaId] || {};
+                const isAllCompleted = allSubParts.length > 0 && allSubParts.every(sp => completedMap[sp.id]);
+
+                // Clear current subpart selection
+                state.inspection.subPart = null;
+
+                if (isAllCompleted) {
+                    // If all done, go back to main list
+                    state.inspection.area = null;
+                    state.currentScreen = 'inspection_list';
+                }
+                
+                saveDraft(); // Auto save
+                render();
+            };
+
+            return div;
+        }
+
+        function renderJobList() {
+            const filtered = state.data.inspections.filter(item => {
+                if(!state.filters.jobDate) return true;
+                return item.date === state.filters.jobDate;
+            });
+
+            const div = document.createElement('div');
+            div.className = "bg-gray-50 min-h-screen pb-10";
+            div.innerHTML = `
+                <div class="bg-white border-b shadow-sm sticky top-0 z-30">
+                    <div class="max-w-5xl mx-auto p-4 flex items-center">
+                        <button id="btn-back" class="text-gray-600 font-medium flex items-center gap-1 hover:text-blue-600"><i data-lucide="chevron-left"></i> กลับหน้าหลัก</button>
+                    </div>
+                </div>
+                <div class="max-w-5xl mx-auto mt-6 px-4">
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div class="p-6 border-b flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                            <div>
+                                <div class="text-blue-600 font-bold text-xl flex items-center gap-2"><i data-lucide="check-circle" width="24"></i> ประวัติการตรวจ</div>
+                                <div class="text-gray-500 text-sm mt-1">แสดงรายการวันที่ ${state.filters.jobDate} <span class="text-blue-500">(คลิกรายการเพื่อแก้ไข)</span></div>
+                            </div>
+                            <div class="flex items-center gap-4 w-full md:w-auto">
+                                <div class="flex items-center gap-2 bg-gray-50 p-2 rounded border flex-1 md:flex-none">
+                                    <i data-lucide="calendar" class="text-gray-500" width="18"></i>
+                                    <span class="text-sm font-bold text-gray-700">วันที่:</span>
+                                    <input type="date" id="date-filter" value="${state.filters.jobDate}" class="border border-gray-300 rounded px-2 py-1 text-sm bg-white focus:outline-none focus:border-blue-500 w-full md:w-auto">
+                                </div>
+                                <div class="text-green-600 text-3xl font-bold whitespace-nowrap">${filtered.length} คัน</div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-gray-100 p-3 font-bold text-gray-700 border-b text-xs uppercase tracking-wider grid grid-cols-[1fr_100px_80px] md:grid-cols-[1fr_150px_100px]">
+                            <div class="pl-2">VIN / User</div>
+                            <div>Loc/Stg</div>
+                            <div class="text-right pr-2">Date</div>
+                        </div>
+                        <div id="job-rows" class="divide-y divide-gray-200"></div>
+                    </div>
+                </div>
+            `;
+
+            div.querySelector('#btn-back').onclick = () => { state.currentScreen = 'main'; render(); };
+            div.querySelector('#date-filter').onchange = (e) => {
+                state.filters.jobDate = e.target.value;
+                render();
+            };
+
+            const rows = div.querySelector('#job-rows');
+            if (filtered.length === 0) {
+                rows.innerHTML = `<div class="p-12 text-center text-gray-400">ไม่พบข้อมูลในวันที่เลือก</div>`;
+            } else {
+                filtered.forEach(item => {
+                    const row = document.createElement('div');
+                    row.className = "grid grid-cols-[1fr_100px_80px] md:grid-cols-[1fr_150px_100px] p-4 text-sm hover:bg-blue-50 transition-colors cursor-pointer group";
+                    row.innerHTML = `
+                        <div class="flex flex-col justify-center">
+                            <div class="font-bold text-gray-800 font-mono text-base md:text-lg group-hover:text-blue-600">${item.vin}</div>
+                            <div class="text-xs text-gray-500 flex items-center gap-1 mt-1"><i data-lucide="user" width="12"></i> ${item.user}</div>
+                        </div>
+                        <div class="text-xs text-gray-600 flex flex-col justify-center">
+                            <span class="font-semibold text-sm">${item.location}</span>
+                            <!-- Added uppercase class -->
+                            <span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded w-fit mt-1 uppercase">${item.stage}</span>
+                        </div>
+                        <div class="text-xs text-gray-400 text-right flex flex-col justify-center items-end">
+                            <div>${item.date ? item.date.substring(5) : '-'}</div>
+                            ${item.editHistory ? `<div class="text-[10px] text-orange-500 flex items-center gap-1 mt-1"><i data-lucide="edit-2" width="10"></i> แก้ไขแล้ว</div>` : ''}
+                        </div>
+                    `;
+                    
+                    // Click handler for editing
+                    row.onclick = () => {
+                        state.editingId = item.id;
+                        // Deep copy to avoid mutation reference issues before saving
+                        state.inspection = JSON.parse(JSON.stringify(item));
+                        // Ensure optional fields exist
+                        if (!state.inspection.defects) state.inspection.defects = {};
+                        if (!state.inspection.notes) state.inspection.notes = {};
+                        if (!state.inspection.completed) state.inspection.completed = {};
+                        if (!state.inspection.editHistory) state.inspection.editHistory = [];
+                        
+                        state.currentScreen = 'inspection_list';
+                        render();
+                    };
+
+                    rows.appendChild(row);
+                });
+            }
+
+            return div;
+        }
+
+        // --- Admin Components ---
+        let adminTab = 'users'; 
+
+        function renderAdminDashboard() {
+            const div = document.createElement('div');
+            div.className = "bg-gray-100 min-h-screen pb-10";
+            
+            const tabsContainer = document.createElement('div');
+            // Changed sticky top-16 to top-0 to prevent overlapping content
+            tabsContainer.className = "bg-white shadow-sm sticky top-0 z-20 border-b";
+            tabsContainer.innerHTML = `
+                <div class="max-w-6xl mx-auto flex justify-around p-2">
+                     <button data-tab="users" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'users' ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="users" width="20"></i> ผู้ใช้งาน</button>
+                    <button data-tab="settings" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'settings' ? 'bg-cyan-50 text-cyan-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="settings" width="20"></i> ตั้งค่าระบบ</button>
+                    <button data-tab="report" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'report' ? 'bg-green-50 text-green-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="file-text" width="20"></i> รายงาน</button>
+                    <button data-tab="summary" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'summary' ? 'bg-purple-50 text-purple-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="bar-chart-2" width="20"></i> สรุปข้อมูล</button>
+                </div>
+            `;
+            
+            tabsContainer.querySelectorAll('button').forEach(btn => {
+                btn.onclick = () => { adminTab = btn.dataset.tab; render(); };
+            });
+            div.appendChild(tabsContainer);
+
+            const content = document.createElement('div');
+            content.className = "p-4 animate-fade-in max-w-6xl mx-auto w-full mt-4";
+
+            if (adminTab === 'users') {
+                content.innerHTML = `
+                    <div class="bg-white rounded-xl shadow-md p-6">
+                        <h2 class="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">จัดการผู้ใช้งาน</h2>
+                        <div class="bg-gray-50 p-4 rounded-lg border mb-6 flex flex-col md:flex-row gap-4 items-end">
+                            <div class="flex-1 w-full">
+                                <label class="text-xs font-bold text-gray-500 mb-1 block">Username</label>
+                                <input type="text" id="new-user" class="w-full border p-2 rounded text-sm focus:border-blue-500 outline-none" placeholder="Username">
+                            </div>
+                            <div class="flex-1 w-full">
+                                <label class="text-xs font-bold text-gray-500 mb-1 block">Password</label>
+                                <input type="text" id="new-pass" class="w-full border p-2 rounded text-sm focus:border-blue-500 outline-none" placeholder="Password">
+                            </div>
+                            <button id="btn-add-user" class="w-full md:w-auto bg-blue-600 text-white px-6 py-2 rounded text-sm font-bold flex justify-center items-center gap-2 hover:bg-blue-700 transition-colors"><i data-lucide="plus"></i> เพิ่มผู้ใช้</button>
+                        </div>
+                        <div class="border rounded-lg overflow-hidden">
+                            <div class="bg-gray-100 p-3 text-xs font-bold text-gray-500 uppercase flex justify-between">
+                                <span>Username</span>
+                                <span>Action</span>
+                            </div>
+                            <div class="divide-y">
+                                ${state.data.users.map(u => `
+                                    <div class="p-4 flex justify-between items-center text-sm hover:bg-gray-50">
+                                        <span class="font-medium text-gray-800">${u.username}</span>
+                                        <button class="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors" onclick="deleteUser('${u.id}')"><i data-lucide="trash-2" width="18"></i></button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                content.querySelector('#btn-add-user').onclick = () => addUser(content.querySelector('#new-user').value, content.querySelector('#new-pass').value);
+            } else if (adminTab === 'settings') {
+                content.innerHTML = `
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-white rounded-xl shadow-md p-6">
+                            <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="map-pin" class="text-blue-500" width="24"></i> สถานที่</h2>
+                            <div class="flex gap-2 mb-4">
+                                <input type="text" id="new-loc" class="flex-1 border p-2 rounded text-sm focus:border-blue-500 outline-none" placeholder="เช่น TERMINAL B2">
+                                <button id="btn-add-loc" class="bg-blue-500 text-white px-4 rounded hover:bg-blue-600 transition-colors"><i data-lucide="plus"></i></button>
+                            </div>
+                            <ul class="divide-y border rounded-lg">
+                                ${state.data.locations.map(l => `<li class="p-3 flex justify-between text-sm hover:bg-gray-50"><span>${l.name}</span><button class="text-red-500 hover:text-red-700" onclick="deleteSetting('locations', '${l.id}')"><i data-lucide="trash-2" width="16"></i></button></li>`).join('')}
+                            </ul>
+                        </div>
+                        <div class="bg-white rounded-xl shadow-md p-6">
+                            <!-- Changed text to Uppercase STAGES -->
+                            <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="layers" class="text-cyan-500" width="24"></i> STAGES</h2>
+                            <div class="flex gap-2 mb-4">
+                                <input type="text" id="new-stg" class="flex-1 border p-2 rounded text-sm focus:border-cyan-500 outline-none" placeholder="เช่น Post-Load">
+                                <button id="btn-add-stg" class="bg-cyan-600 text-white px-4 rounded hover:bg-cyan-700 transition-colors"><i data-lucide="plus"></i></button>
+                            </div>
+                            <ul class="divide-y border rounded-lg">
+                                ${state.data.stages.map(s => `<li class="p-3 flex justify-between text-sm hover:bg-gray-50 uppercase"><span>${s.name}</span><button class="text-red-500 hover:text-red-700" onclick="deleteSetting('stages', '${s.id}')"><i data-lucide="trash-2" width="16"></i></button></li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                `;
+                content.querySelector('#btn-add-loc').onclick = () => addSetting('locations', content.querySelector('#new-loc').value);
+                content.querySelector('#btn-add-stg').onclick = () => addSetting('stages', content.querySelector('#new-stg').value);
+            } else if (adminTab === 'report') {
+                const filtered = state.data.inspections.filter(item => {
+                    if(!state.filters.reportDate) return true;
+                    return item.date === state.filters.reportDate;
+                });
+                
+                content.innerHTML = `
+                    <div class="bg-white rounded-xl shadow-md p-6">
+                        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                            <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2"><i data-lucide="filter" class="text-green-600"></i> กรองข้อมูล & เช็คงาน</h2>
+                            <div class="flex gap-2 w-full md:w-auto">
+                                <button id="btn-export" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-green-700 flex items-center gap-2 ml-auto"><i data-lucide="download" width="16"></i> Export CSV</button>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center gap-2 mb-6 bg-gray-50 p-3 rounded-lg border w-full md:w-fit">
+                            <span class="text-sm font-bold text-gray-700">วันที่:</span>
+                            <input type="date" id="admin-date-filter" value="${state.filters.reportDate}" class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm bg-white outline-none focus:border-green-500">
+                        </div>
+                        
+                        <div class="text-sm text-gray-500 mb-2">พบ ${filtered.length} รายการ</div>
+
+                        <div class="border rounded-lg overflow-hidden max-h-[60vh] overflow-y-auto">
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-gray-100 text-gray-700 sticky top-0 font-bold uppercase text-xs">
+                                    <tr>
+                                        <th class="p-3">VIN</th>
+                                        <th class="p-3">User</th>
+                                        <th class="p-3 text-right">Loc/Stg</th>
+                                        <th class="p-3 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    ${filtered.length > 0 ? filtered.map(v => `
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="p-3 font-mono font-medium">${v.vin}</td>
+                                            <td class="p-3 text-gray-600">${v.user}</td>
+                                            <td class="p-3 text-right">
+                                                <div class="font-medium text-gray-800">${v.location}</div>
+                                                <div class="text-blue-500 text-xs bg-blue-50 inline-block px-1 rounded uppercase">${v.stage}</div>
+                                            </td>
+                                            <td class="p-3 text-right flex justify-end gap-2">
+                                                <button class="text-blue-500 hover:text-blue-700 p-1 rounded hover:bg-blue-50 transition-colors" onclick='editInspection(${JSON.stringify(v)})'><i data-lucide="edit-3" width="18"></i></button>
+                                                <button class="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors" onclick="deleteInspection('${v.id}')"><i data-lucide="trash-2" width="18"></i></button>
+                                            </td>
+                                        </tr>
+                                    `).join('') : `<tr><td colspan="4" class="p-12 text-center text-gray-400">ไม่พบข้อมูล</td></tr>`}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                content.querySelector('#admin-date-filter').onchange = (e) => { state.filters.reportDate = e.target.value; render(); };
+                content.querySelector('#btn-export').onclick = () => exportCSV(filtered);
+            } else if (adminTab === 'summary') {
+                const type = state.filters.summaryType;
+                const dateVal = state.filters.summaryDate;
+                
+                // Filter Data
+                const filtered = state.data.inspections.filter(item => {
+                    if (!item.date) return false;
+                    if (type === 'daily') return item.date === dateVal;
+                    if (type === 'monthly') return item.date.startsWith(dateVal.substring(0, 7));
+                    return false;
+                });
+
+                // Aggregation Logic
+                let totalDefects = 0;
+                const byLocation = {};
+                const byPart = {};
+
+                filtered.forEach(item => {
+                    const loc = item.location || 'Unknown';
+                    const stg = item.stage || 'Unknown';
+                    
+                    // Init Location structure
+                    if (!byLocation[loc]) byLocation[loc] = {};
+                    if (!byLocation[loc][stg]) byLocation[loc][stg] = { cars: 0, vins: [], defects: { grass: 0, insect: 0, bird_drop: 0 } };
+                    
+                    byLocation[loc][stg].cars++;
+                    byLocation[loc][stg].vins.push(item.vin); // Collect VIN
+
+                    // Count defects
+                    if (item.defects) {
+                        Object.entries(item.defects).forEach(([areaId, areaVal]) => {
+                            // Helper to process defect counts
+                            const processCounts = (targetKey, counts) => {
+                                Object.entries(counts).forEach(([dType, count]) => {
+                                    if(count > 0) {
+                                        totalDefects += count;
+                                        byLocation[loc][stg].defects[dType] += count;
+                                        
+                                        if(!byPart[targetKey]) byPart[targetKey] = { grass: 0, insect: 0, bird_drop: 0, total: 0 };
+                                        byPart[targetKey][dType] += count;
+                                        byPart[targetKey].total += count;
+                                    }
+                                });
+                            };
+
+                            // Check subparts
+                            const areaObj = INSPECTION_AREAS.find(a => a.id == areaId);
+                            if (areaObj && areaObj.subparts) {
+                                Object.entries(areaVal).forEach(([spId, spCounts]) => {
+                                    const spObj = areaObj.subparts.find(s => s.id === spId);
+                                    const name = spObj ? spObj.en : spId;
+                                    processCounts(name, spCounts);
+                                });
+                            } else {
+                                const name = areaObj ? areaObj.en : areaId;
+                                processCounts(name, areaVal);
+                            }
+                        });
+                    }
+                });
+
+                // Find Top Part
+                let topPartName = '-';
+                let topPartCount = 0;
+                Object.entries(byPart).forEach(([name, counts]) => {
+                    if (counts.total > topPartCount) {
+                        topPartCount = counts.total;
+                        topPartName = name;
+                    }
+                });
+
+                content.innerHTML = `
+                    <div class="space-y-6">
+                        <!-- Controls -->
+                        <div class="bg-white rounded-xl shadow-md p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <div class="bg-gray-100 p-1 rounded-lg flex text-sm font-bold">
+                                    <button class="px-4 py-2 rounded-md transition-colors ${type === 'daily' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}" onclick="setSummaryType('daily')">รายวัน</button>
+                                    <button class="px-4 py-2 rounded-md transition-colors ${type === 'monthly' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}" onclick="setSummaryType('monthly')">รายเดือน</button>
+                                </div>
+                                <input type="${type === 'daily' ? 'date' : 'month'}" id="summary-date" value="${type === 'daily' ? dateVal : dateVal.substring(0, 7)}" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white outline-none focus:border-purple-500">
+                            </div>
+                            <button onclick="exportSummaryCSV()" class="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-purple-700 flex items-center gap-2"><i data-lucide="download" width="16"></i> Export Report</button>
+                        </div>
+
+                        <!-- Overview Cards -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-500">
+                                <div class="text-gray-500 text-sm font-bold uppercase">จำนวนรถที่ตรวจ</div>
+                                <div class="text-3xl font-bold text-gray-800 mt-1">${filtered.length} <span class="text-sm font-normal text-gray-400">คัน</span></div>
+                            </div>
+                            <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-red-500">
+                                <div class="text-gray-500 text-sm font-bold uppercase">ความเสียหายรวม</div>
+                                <div class="text-3xl font-bold text-gray-800 mt-1">${totalDefects} <span class="text-sm font-normal text-gray-400">จุด</span></div>
+                            </div>
+                            <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-orange-500">
+                                <div class="text-gray-500 text-sm font-bold uppercase">ชิ้นส่วนที่พบมากสุด</div>
+                                <div class="text-xl font-bold text-gray-800 mt-1 truncate">${topPartName}</div>
+                                <div class="text-xs text-gray-400">${topPartCount} จุด</div>
+                            </div>
+                        </div>
+
+                        <!-- Location & Stage Breakdown -->
+                        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                            <div class="p-4 bg-gray-50 border-b font-bold text-gray-700">สรุปแยกตามสถานที่และ Stage</div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-sm text-left">
+                                    <thead class="bg-gray-100 text-gray-600 uppercase text-xs font-bold">
+                                        <tr>
+                                            <th class="p-3">สถานที่</th>
+                                            <th class="p-3">Stage</th>
+                                            <th class="p-3 text-center">จำนวนรถ</th>
+                                            <th class="p-3">VIN List</th>
+                                            <th class="p-3 text-center text-green-600">ดอกหญ้า</th>
+                                            <th class="p-3 text-center text-orange-600">แมลง</th>
+                                            <th class="p-3 text-center text-gray-600">มูลนก</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        ${Object.keys(byLocation).length > 0 ? Object.entries(byLocation).map(([loc, stages]) => 
+                                            Object.entries(stages).map(([stg, data]) => `
+                                                <tr class="hover:bg-gray-50">
+                                                    <td class="p-3 font-medium">${loc}</td>
+                                                    <td class="p-3"><span class="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs font-bold uppercase">${stg}</span></td>
+                                                    <td class="p-3 text-center font-bold">${data.cars}</td>
+                                                    <td class="p-3 text-xs text-gray-500 break-words max-w-xs">${data.vins.join(', ')}</td>
+                                                    <td class="p-3 text-center">${data.defects.grass}</td>
+                                                    <td class="p-3 text-center">${data.defects.insect}</td>
+                                                    <td class="p-3 text-center">${data.defects.bird_drop}</td>
+                                                </tr>
+                                            `).join('')
+                                        ).join('') : `<tr><td colspan="7" class="p-8 text-center text-gray-400">ไม่มีข้อมูลในช่วงเวลานี้</td></tr>`}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Part Breakdown -->
+                        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                            <div class="p-4 bg-gray-50 border-b font-bold text-gray-700">สรุปรายละเอียดรายชิ้นส่วน</div>
+                            <div class="overflow-x-auto max-h-[400px]">
+                                <table class="w-full text-sm text-left">
+                                    <thead class="bg-gray-100 text-gray-600 uppercase text-xs font-bold sticky top-0">
+                                        <tr>
+                                            <th class="p-3">ชิ้นส่วน</th>
+                                            <th class="p-3 text-center text-green-600">ดอกหญ้า</th>
+                                            <th class="p-3 text-center text-orange-600">แมลง</th>
+                                            <th class="p-3 text-center text-gray-600">มูลนก</th>
+                                            <th class="p-3 text-center font-bold">รวม</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        ${Object.keys(byPart).length > 0 ? Object.entries(byPart).sort((a,b) => b[1].total - a[1].total).map(([name, counts]) => `
+                                            <tr class="hover:bg-gray-50">
+                                                <td class="p-3 font-medium">${name}</td>
+                                                <td class="p-3 text-center">${counts.grass}</td>
+                                                <td class="p-3 text-center">${counts.insect}</td>
+                                                <td class="p-3 text-center">${counts.bird_drop}</td>
+                                                <td class="p-3 text-center font-bold">${counts.total}</td>
+                                            </tr>
+                                        `).join('') : `<tr><td colspan="5" class="p-8 text-center text-gray-400">ไม่มีข้อมูลความเสียหาย</td></tr>`}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                content.querySelector('#summary-date').onchange = (e) => {
+                    state.filters.summaryDate = e.target.value;
+                    render();
+                };
+            }
+
+            div.appendChild(content);
+            return div;
+        }
+
+        // --- Logic Handlers ---
+
+        function handleLogin(u, p, remember) {
+            if (u === 'admin' && p === 'admin') {
+                state.user = 'Admin';
+                state.isAdmin = true;
+                state.currentScreen = 'admin_dashboard';
+                render();
+                return;
+            }
+            const found = state.data.users.find(user => user.username === u && user.password === p);
+            if (found) {
+                state.user = found.username;
+                state.isAdmin = false;
+                
+                // Handle Remember Me
+                if (remember) {
+                    localStorage.setItem('2ps_user', u);
+                    localStorage.setItem('2ps_pass', p);
+                } else {
+                    localStorage.removeItem('2ps_user');
+                    localStorage.removeItem('2ps_pass');
+                }
+
+                // Check Draft
+                const draft = localStorage.getItem('2ps_draft_inspection');
+                if (draft) {
+                    try {
+                        const parsed = JSON.parse(draft);
+                        // Check if draft belongs to user (optional check) or simply exists
+                        if (parsed._owner === u) {
+                            if (confirm(`พบงานตรวจสอบค้างอยู่ (${parsed.vin || 'ยังไม่ระบุ VIN'})\nต้องการทำรายการต่อหรือไม่?`)) {
+                                state.inspection = parsed;
+                                // Determine screen
+                                if (parsed.vin) {
+                                    state.currentScreen = 'inspection_list';
+                                } else if (parsed.location) {
+                                    state.currentScreen = 'scanner';
+                                } else {
+                                    state.currentScreen = 'select_location';
+                                }
+                                render();
+                                return;
+                            } else {
+                                clearDraft();
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Draft Error", e);
+                        clearDraft();
+                    }
+                }
+
+                state.currentScreen = 'main';
+                render();
+            } else {
+                const err = document.getElementById('login-error');
+                err.textContent = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง";
+                err.classList.remove('hidden');
+            }
+        }
+
+        function handleLogout() {
+            state.user = null;
+            state.isAdmin = false;
+            state.currentScreen = 'login';
+            state.inspection = { location: null, stage: null, vin: null, area: null, subPart: null, defects: {}, notes: {}, completed: {}, editHistory: [] };
+            state.editingId = null;
+            clearDraft(); // Clear draft on logout
+            render();
+        }
+
+        window.deleteUser = (id) => { if(confirm('ยืนยันลบ?')) remove(ref(db, `users/${id}`)); };
+        window.deleteSetting = (type, id) => { if(confirm('ยืนยันลบ?')) remove(ref(db, `settings/${type}/${id}`)); };
+        
+        window.deleteInspection = (id) => {
+            const password = prompt("กรุณาใส่รหัสยืนยันการลบ (Admin Password):");
+            if (password === 'admin') {
+                if(confirm('ยืนยันที่จะลบข้อมูลนี้ถาวร?')) {
+                    remove(ref(db, `inspections/${id}`));
+                }
+            } else if (password !== null) {
+                alert("รหัสผ่านไม่ถูกต้อง");
+            }
+        };
+
+        window.editInspection = (item) => {
+            state.editingId = item.id;
+            state.inspection = JSON.parse(JSON.stringify(item));
+            if (!state.inspection.defects) state.inspection.defects = {};
+            if (!state.inspection.notes) state.inspection.notes = {};
+            if (!state.inspection.completed) state.inspection.completed = {};
+            if (!state.inspection.editHistory) state.inspection.editHistory = [];
+            state.currentScreen = 'inspection_list';
+            render();
+        };
+
+        window.setSummaryType = (type) => {
+            state.filters.summaryType = type;
+            render();
+        };
+
+        window.exportSummaryCSV = () => {
+            const type = state.filters.summaryType;
+            const dateVal = state.filters.summaryDate;
+            
+            // Re-filter for export
+            const filtered = state.data.inspections.filter(item => {
+                if (!item.date) return false;
+                if (type === 'daily') return item.date === dateVal;
+                if (type === 'monthly') return item.date.startsWith(dateVal.substring(0, 7));
+                return false;
+            });
+
+            if (filtered.length === 0) return alert('ไม่มีข้อมูลสำหรับ Export');
+
+            // 1. Calculate By Part
+            const byPart = {};
+            // 2. Calculate By Location (for VIN list)
+            const byLocation = {};
+
+            filtered.forEach(item => {
+                // By Location Logic
+                const loc = item.location || 'Unknown';
+                const stg = item.stage || 'Unknown';
+                if (!byLocation[loc]) byLocation[loc] = {};
+                if (!byLocation[loc][stg]) byLocation[loc][stg] = { cars: 0, vins: [], defects: { grass: 0, insect: 0, bird_drop: 0 } };
+                byLocation[loc][stg].cars++;
+                byLocation[loc][stg].vins.push(item.vin);
+
+                // By Part Logic
+                if (item.defects) {
+                    Object.entries(item.defects).forEach(([areaId, areaVal]) => {
+                        const processCounts = (targetKey, counts) => {
+                            if(!byPart[targetKey]) byPart[targetKey] = { grass: 0, insect: 0, bird_drop: 0 };
+                            Object.entries(counts).forEach(([dType, count]) => {
+                                if(count > 0) {
+                                    byPart[targetKey][dType] += count;
+                                    byLocation[loc][stg].defects[dType] += count;
+                                }
+                            });
+                        };
+                        const areaObj = INSPECTION_AREAS.find(a => a.id == areaId);
+                        if (areaObj && areaObj.subparts) {
+                            Object.entries(areaVal).forEach(([spId, spCounts]) => {
+                                const spObj = areaObj.subparts.find(s => s.id === spId);
+                                processCounts(spObj ? spObj.en : spId, spCounts);
+                            });
+                        } else {
+                            processCounts(areaObj ? areaObj.en : areaId, areaVal);
+                        }
+                    });
+                }
+            });
+
+            // Build CSV Content
+            let csvContent = "\uFEFF"; // BOM
+            csvContent += `Summary Report (${type === 'daily' ? 'Daily' : 'Monthly'})\n`;
+            csvContent += `Date: ${dateVal}\n`;
+            csvContent += `Total Cars: ${filtered.length}\n\n`;
+
+            // Section 1: Location/Stage Summary with VINs
+            csvContent += "--- Location & Stage Summary ---\n";
+            csvContent += "Location,Stage,Car Count,VINs,Grass,Insect,Bird Drop\n";
+            Object.entries(byLocation).forEach(([loc, stages]) => {
+                Object.entries(stages).forEach(([stg, data]) => {
+                    const vinStr = `"${data.vins.join(', ')}"`; 
+                    csvContent += `"${loc}","${stg}",${data.cars},${vinStr},${data.defects.grass},${data.defects.insect},${data.defects.bird_drop}\n`;
+                });
+            });
+
+            csvContent += "\n";
+
+            // Section 2: Part Summary
+            csvContent += "--- Part Breakdown Summary ---\n";
+            csvContent += "Part Name,Grass,Insect,Bird Drop,Total\n";
+            Object.entries(byPart).forEach(([name, c]) => {
+                csvContent += `"${name}",${c.grass},${c.insect},${c.bird_drop},${c.grass + c.insect + c.bird_drop}\n`;
+            });
+
+            const link = document.createElement("a");
+            link.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csvContent);
+            link.download = `summary_full_${type}_${dateVal}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        function addUser(u, p) {
+            if(!u || !p) return alert('กรอกข้อมูลให้ครบ');
+            push(ref(db, 'users'), { username: u, password: p });
+        }
+
+        function addSetting(type, name) {
+            if(!name) return;
+            push(ref(db, `settings/${type}`), { name });
+        }
+
+        function exportCSV(data) {
+            if(data.length === 0) return alert('ไม่มีข้อมูล');
+            const header = ["VIN", "User", "Location", "Stage", "Date", "Summary"];
+            const rows = data.map(d => {
+                let summary = [];
+                if(d.defects) {
+                    for(const [aid, val] of Object.entries(d.defects)) {
+                        const areaObj = INSPECTION_AREAS.find(a => a.id == aid);
+                        const areaName = areaObj?.en || aid;
+
+                        if (areaObj && areaObj.subparts) {
+                            for(const [spId, spDefects] of Object.entries(val)) {
+                                const spObj = areaObj.subparts.find(s => s.id === spId);
+                                const spName = spObj ? spObj.en : spId;
+                                const det = Object.entries(spDefects).filter(([k,v]) => v > 0).map(([k,v]) => `${k}:${v}`).join(' ');
+                                if(det) summary.push(`${areaName}->${spName}[${det}]`);
+                            }
+                        } else {
+                            const det = Object.entries(val).filter(([k,v]) => v > 0).map(([k,v]) => `${k}:${v}`).join(' ');
+                            if(det) summary.push(`${areaName}[${det}]`);
+                        }
+                    }
+                }
+                return `"${d.vin}","${d.user}","${d.location}","${d.stage}","${d.date}","${summary.join('; ')}"`;
+            });
+            
+            const csvContent = "data:text/csv;charset=utf-8," + header.join(",") + "\n" + rows.join("\n");
+            const link = document.createElement("a");
+            link.href = encodeURI(csvContent);
+            link.download = `report_${state.filters.reportDate}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        initApp();
+
+    </script>
+</body>
+</html>
