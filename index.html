@@ -89,7 +89,8 @@
             },
             filters: {
                 jobDate: new Date().toISOString().split('T')[0],
-                reportDate: new Date().toISOString().split('T')[0],
+                reportStartDate: new Date().toISOString().split('T')[0],
+                reportEndDate: new Date().toISOString().split('T')[0],
                 summaryType: 'daily', // daily, monthly
                 summaryDate: new Date().toISOString().split('T')[0]
             }
@@ -501,6 +502,12 @@
                         <i data-lucide="camera" width="24"></i> เปิดกล้อง / สแกน
                     </button>
                 </div>
+                <!-- Custom Modal for Scan Result -->
+                <div id="scan-modal" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 hidden backdrop-blur-sm pointer-events-auto">
+                    <div class="bg-white rounded-xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl transition-transform transform scale-95 duration-200" id="scan-modal-inner">
+                        <div id="scan-modal-content" class="p-0"></div>
+                    </div>
+                </div>
             `;
 
             div.querySelector('#btn-back').onclick = () => { stopScanner(); state.currentScreen = 'main'; render(); };
@@ -528,42 +535,123 @@
                         (decodedText) => {
                             stopScanner();
                             
-                            // Check for duplicate VIN in existing data
-                            const existingInspection = state.data.inspections.find(i => i.vin === decodedText);
-
-                            if (existingInspection) {
-                                // Found duplicate
-                                if(confirm(`⚠️ รถคันนี้ (${decodedText}) ตรวจสอบแล้ว!\nต้องการแก้ไขข้อมูลเดิมหรือไม่?`)) {
-                                    // Switch to Edit Mode
-                                    state.editingId = existingInspection.id;
-                                    
-                                    // Deep copy existing data
-                                    state.inspection = JSON.parse(JSON.stringify(existingInspection));
-                                    
-                                    // Ensure optional fields exist
-                                    state.inspection.defects = state.inspection.defects || {};
-                                    state.inspection.notes = state.inspection.notes || {};
-                                    state.inspection.completed = state.inspection.completed || {};
-                                    state.inspection.editHistory = state.inspection.editHistory || [];
-
-                                    saveDraft(); // Auto save
-                                    state.currentScreen = 'inspection_list';
-                                    render();
-                                } else {
-                                    // Cancel, resume scanning
-                                    startScanner();
-                                }
-                            } else {
-                                // New VIN
-                                if(confirm(`ยืนยัน VIN: ${decodedText}`)) {
-                                    state.inspection.vin = decodedText;
-                                    saveDraft(); // Auto save
-                                    state.currentScreen = 'inspection_list';
-                                    render();
-                                } else {
-                                    startScanner(); 
-                                }
+                            // Get ALL history for this VIN
+                            const history = state.data.inspections.filter(i => i.vin === decodedText);
+                            // Check if duplicate in EXACTLY this location and stage
+                            const isDuplicateHere = history.some(i => i.location === state.inspection.location && i.stage === state.inspection.stage);
+                            
+                            const modal = div.querySelector('#scan-modal');
+                            const innerModal = div.querySelector('#scan-modal-inner');
+                            const content = div.querySelector('#scan-modal-content');
+                            
+                            // Generate History HTML
+                            let historyHtml = '';
+                            if (history.length > 0) {
+                                // Sort history newest first
+                                const sortedHistory = [...history].sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+                                historyHtml = `
+                                    <div class="bg-gray-50 p-4 border-t border-b border-gray-200 max-h-48 overflow-y-auto no-scrollbar">
+                                        <div class="text-xs font-bold text-gray-500 mb-2 uppercase flex items-center gap-1"><i data-lucide="history" width="14"></i> ประวัติการตรวจ (${history.length} ครั้ง)</div>
+                                        <div class="space-y-2">
+                                            ${sortedHistory.map(h => `
+                                                <div class="bg-white p-3 rounded-lg border border-gray-200 shadow-sm text-sm">
+                                                    <div class="flex justify-between items-center mb-2">
+                                                        <span class="font-bold text-blue-700 text-base">${h.location}</span>
+                                                        <span class="bg-blue-100 text-blue-800 text-[10px] px-2 py-1 rounded uppercase font-bold">${h.stage}</span>
+                                                    </div>
+                                                    <div class="flex justify-between text-xs text-gray-500">
+                                                        <span class="flex items-center gap-1"><i data-lucide="calendar" width="12"></i> ${h.date || '-'}</span>
+                                                        <span class="flex items-center gap-1"><i data-lucide="user" width="12"></i> ${h.user || 'ไม่ระบุ'}</span>
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                `;
                             }
+
+                            if (isDuplicateHere) {
+                                // Block exact duplicate
+                                content.innerHTML = `
+                                    <div class="bg-red-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
+                                        <i data-lucide="x-circle"></i> ตรวจสอบซ้ำซ้อน!
+                                    </div>
+                                    <div class="p-6 text-center">
+                                        <div class="text-sm text-gray-500 mb-1">VIN Number</div>
+                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-4">${decodedText}</div>
+                                        <p class="text-red-600 font-medium mb-2">รถคันนี้ถูกตรวจใน</p>
+                                        <p class="text-lg font-bold text-gray-800">${state.inspection.location}</p>
+                                        <p class="text-sm font-bold bg-gray-100 inline-block px-2 py-1 rounded mt-1 uppercase">${state.inspection.stage}</p>
+                                        <p class="text-red-600 font-medium mt-2">ไปแล้ว!</p>
+                                    </div>
+                                    ${historyHtml}
+                                    <div class="p-4 bg-gray-50 flex justify-center">
+                                        <button id="btn-modal-close" class="bg-gray-500 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-600 w-full transition-colors">รับทราบ / สแกนใหม่</button>
+                                    </div>
+                                `;
+                            } else if (history.length > 0) {
+                                // Allow if different location/stage
+                                content.innerHTML = `
+                                    <div class="bg-orange-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
+                                        <i data-lucide="alert-triangle"></i> รถคันนี้เคยตรวจแล้ว
+                                    </div>
+                                    <div class="p-6 text-center">
+                                        <div class="text-sm text-gray-500 mb-1">VIN Number</div>
+                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-4">${decodedText}</div>
+                                        <p class="text-gray-600 text-sm mb-2">ยืนยันที่จะเปิดงานตรวจใหม่สำหรับ</p>
+                                        <p class="text-lg font-bold text-blue-700">${state.inspection.location}</p>
+                                        <p class="text-sm font-bold bg-blue-50 text-blue-800 inline-block px-2 py-1 rounded mt-1 uppercase">${state.inspection.stage}</p>
+                                        <p class="text-gray-600 text-sm mt-2">หรือไม่?</p>
+                                    </div>
+                                    ${historyHtml}
+                                    <div class="p-4 bg-gray-50 flex gap-3">
+                                        <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
+                                        <button id="btn-modal-confirm" class="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-blue-700 shadow-md transition-colors">ยืนยันเริ่มตรวจ</button>
+                                    </div>
+                                `;
+                            } else {
+                                // New VIN completely
+                                content.innerHTML = `
+                                    <div class="bg-green-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
+                                        <i data-lucide="check-circle"></i> สแกนสำเร็จ
+                                    </div>
+                                    <div class="p-6 text-center">
+                                        <div class="text-sm text-gray-500 mb-1">VIN Number</div>
+                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-4">${decodedText}</div>
+                                        <p class="text-gray-600">ไม่พบประวัติการตรวจในระบบ<br/>พร้อมเริ่มงานใหม่</p>
+                                    </div>
+                                    <div class="p-4 bg-gray-50 flex gap-3">
+                                        <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
+                                        <button id="btn-modal-confirm" class="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-green-700 shadow-md transition-colors">เริ่มตรวจ</button>
+                                    </div>
+                                `;
+                            }
+
+                            modal.classList.remove('hidden');
+                            setTimeout(() => innerModal.classList.remove('scale-95'), 10);
+                            lucide.createIcons();
+
+                            // Event Listeners for modal
+                            const closeBtn = div.querySelector('#btn-modal-close');
+                            if (closeBtn) closeBtn.onclick = () => { 
+                                innerModal.classList.add('scale-95');
+                                setTimeout(() => { modal.classList.add('hidden'); startScanner(); }, 200); 
+                            };
+                            
+                            const cancelBtn = div.querySelector('#btn-modal-cancel');
+                            if (cancelBtn) cancelBtn.onclick = () => { 
+                                innerModal.classList.add('scale-95');
+                                setTimeout(() => { modal.classList.add('hidden'); startScanner(); }, 200); 
+                            };
+
+                            const confirmBtn = div.querySelector('#btn-modal-confirm');
+                            if (confirmBtn) confirmBtn.onclick = () => {
+                                modal.classList.add('hidden');
+                                state.inspection.vin = decodedText;
+                                saveDraft();
+                                state.currentScreen = 'inspection_list';
+                                render();
+                            };
                         },
                         (err) => {} 
                     );
@@ -1184,8 +1272,8 @@
                 content.querySelector('#btn-add-stg').onclick = () => addSetting('stages', content.querySelector('#new-stg').value);
             } else if (adminTab === 'report') {
                 const filtered = state.data.inspections.filter(item => {
-                    if(!state.filters.reportDate) return true;
-                    return item.date === state.filters.reportDate;
+                    if(!item.date) return false;
+                    return item.date >= state.filters.reportStartDate && item.date <= state.filters.reportEndDate;
                 });
                 
                 content.innerHTML = `
@@ -1193,13 +1281,20 @@
                         <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                             <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2"><i data-lucide="filter" class="text-green-600"></i> กรองข้อมูล & เช็คงาน</h2>
                             <div class="flex gap-2 w-full md:w-auto">
-                                <button id="btn-export" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-green-700 flex items-center gap-2 ml-auto"><i data-lucide="download" width="16"></i> Export CSV</button>
+                                <button id="btn-export" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-green-700 flex items-center gap-2 ml-auto"><i data-lucide="download" width="16"></i> Export Excel (CSV)</button>
                             </div>
                         </div>
                         
-                        <div class="flex items-center gap-2 mb-6 bg-gray-50 p-3 rounded-lg border w-full md:w-fit">
-                            <span class="text-sm font-bold text-gray-700">วันที่:</span>
-                            <input type="date" id="admin-date-filter" value="${state.filters.reportDate}" class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm bg-white outline-none focus:border-green-500">
+                        <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6 bg-gray-50 p-4 rounded-lg border w-full md:w-fit">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm font-bold text-gray-700">เริ่ม:</span>
+                                <input type="date" id="admin-date-start" value="${state.filters.reportStartDate}" class="border border-gray-300 rounded px-2 py-1 text-sm bg-white outline-none focus:border-green-500">
+                            </div>
+                            <span class="hidden sm:inline text-gray-400">-</span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm font-bold text-gray-700">ถึง:</span>
+                                <input type="date" id="admin-date-end" value="${state.filters.reportEndDate}" class="border border-gray-300 rounded px-2 py-1 text-sm bg-white outline-none focus:border-green-500">
+                            </div>
                         </div>
                         
                         <div class="text-sm text-gray-500 mb-2">พบ ${filtered.length} รายการ</div>
@@ -1234,7 +1329,8 @@
                         </div>
                     </div>
                 `;
-                content.querySelector('#admin-date-filter').onchange = (e) => { state.filters.reportDate = e.target.value; render(); };
+                content.querySelector('#admin-date-start').onchange = (e) => { state.filters.reportStartDate = e.target.value; render(); };
+                content.querySelector('#admin-date-end').onchange = (e) => { state.filters.reportEndDate = e.target.value; render(); };
                 content.querySelector('#btn-export').onclick = () => exportCSV(filtered);
             } else if (adminTab === 'summary') {
                 const type = state.filters.summaryType;
@@ -1638,10 +1734,12 @@
                 return `"${d.vin}","${d.user}","${d.location}","${d.stage}","${d.date}","${summary.join('; ')}"`;
             });
             
-            const csvContent = "data:text/csv;charset=utf-8," + header.join(",") + "\n" + rows.join("\n");
+            let csvContent = "\uFEFF"; // เพิ่ม BOM เพื่อให้ Excel อ่านภาษาไทยได้ตรง
+            csvContent += header.join(",") + "\n" + rows.join("\n");
+            
             const link = document.createElement("a");
-            link.href = encodeURI(csvContent);
-            link.download = `report_${state.filters.reportDate}.csv`;
+            link.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csvContent);
+            link.download = `report_${state.filters.reportStartDate}_to_${state.filters.reportEndDate}.csv`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
