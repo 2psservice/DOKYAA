@@ -1082,8 +1082,15 @@
 
                     clearDraft(); // Clear local draft on success
 
-                    // Reset inspection
-                    state.inspection = { location: null, stage: null, vin: null, area: null, subPart: null, defects: {}, notes: {}, completed: {}, editHistory: [] };
+                    // Reset inspection but keep location and stage for continuous scanning
+                    const prevLoc = state.inspection.location;
+                    const prevStg = state.inspection.stage;
+
+                    state.inspection = {
+                        location: isEdit ? null : prevLoc,
+                        stage: isEdit ? null : prevStg,
+                        vin: null, area: null, subPart: null, defects: {}, notes: {}, completed: {}, editHistory: []
+                    };
 
                     // Return to main menu, job list, or admin dashboard based on role and edit mode
                     if (isEdit && state.isAdmin) {
@@ -1091,7 +1098,7 @@
                     } else if (isEdit) {
                         state.currentScreen = 'job_list';
                     } else {
-                        state.currentScreen = 'main';
+                        state.currentScreen = 'scanner';
                     }
 
                     render();
