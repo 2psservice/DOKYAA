@@ -610,18 +610,15 @@
             div.innerHTML = `
                 <div class="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-10 bg-gradient-to-b from-black/80 to-transparent text-white pointer-events-none">
                     <button id="btn-back" class="text-white flex items-center gap-1 bg-black/20 px-4 py-2 rounded backdrop-blur-sm pointer-events-auto hover:bg-black/40">
-                        <i data-lucide="chevron-left"></i> กลับ
+                        <i data-lucide="chevron-left"></i> กลับหน้าหลัก
                     </button>
-                    <div class="text-right">
-                        <div class="font-bold text-blue-400 text-xl">${state.inspection.location}</div>
-                        <div class="text-base text-cyan-300 bg-cyan-900/40 px-3 py-1 rounded inline-block mt-1 uppercase">${state.inspection.stage}</div>
-                    </div>
+                    <!-- Indicators moved to the center bottom -->
                 </div>
                 <div class="flex-1 bg-gray-900 flex flex-col items-center justify-center relative overflow-hidden p-4">
                     <div id="reader" class="w-full max-w-lg mx-auto rounded-xl overflow-hidden shadow-2xl hidden border-2 border-white/20"></div>
                     <div id="placeholder" class="flex flex-col items-center text-gray-400 gap-4">
                         <i data-lucide="camera" width="64" height="64"></i>
-                        <p class="text-lg">กดปุ่ม "เปิดกล้อง" เพื่อเริ่มสแกน QR Code</p>
+                        <p class="text-lg">กดปุ่ม ด้านล่างภาพ เพื่อเริ่มสแกน QR Code</p>
                         <div id="scan-error" class="text-red-500 text-sm hidden"></div>
                     </div>
                     <div id="scanning-overlay" class="absolute bottom-32 text-white text-center w-full animate-pulse bg-black/50 p-2 hidden pointer-events-none">กำลังค้นหา QR Code...</div>
@@ -629,9 +626,14 @@
                         <i data-lucide="rotate-ccw" width="24"></i>
                     </button>
                 </div>
-                <div class="bg-white p-6 flex justify-around items-center z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-                    <button id="btn-toggle-scan" class="bg-blue-500 text-white px-8 py-4 rounded-xl shadow-lg font-bold flex items-center gap-3 hover:bg-blue-600 w-full max-w-md mx-auto justify-center text-lg transition-transform active:scale-95">
-                        <i data-lucide="camera" width="24"></i> เปิดกล้อง / สแกน
+                <div class="bg-gray-50 flex flex-col items-center z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] rounded-t-3xl -mt-6 pb-8 pt-6 px-6">
+                    <div class="text-center w-full max-w-md mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                        <div class="text-xs font-bold text-gray-400 mb-1 uppercase tracking-widest">สถานที่ปัจจุบัน</div>
+                        <div class="font-black text-blue-600 text-2xl mb-1">${state.inspection.location}</div>
+                        <div class="text-sm text-cyan-700 bg-cyan-50 px-3 py-1 rounded inline-block font-bold border border-cyan-100 uppercase">${state.inspection.stage}</div>
+                    </div>
+                    <button id="btn-toggle-scan" class="bg-blue-600 text-white px-8 py-5 rounded-2xl shadow-xl font-bold flex items-center gap-3 hover:bg-blue-700 w-full max-w-md mx-auto justify-center text-xl transition-transform active:scale-95 border-b-4 border-blue-800">
+                        <i data-lucide="camera" width="28"></i> เปิดกล้อง / สแกน
                     </button>
                 </div>
                 <!-- Custom Modal for Scan Result -->
@@ -789,8 +791,8 @@
                         (err) => { }
                     );
 
-                    btnToggle.innerHTML = `<i data-lucide="x" width="24"></i> ปิดกล้อง`;
-                    btnToggle.className = "bg-gray-500 text-white px-8 py-4 rounded-xl shadow-lg font-bold flex items-center gap-3 hover:bg-gray-600 w-full max-w-md mx-auto justify-center text-lg transition-transform active:scale-95";
+                    btnToggle.innerHTML = `<i data-lucide="x" width="28"></i> ปิดกล้อง`;
+                    btnToggle.className = "bg-gray-600 text-white px-8 py-5 rounded-2xl shadow-xl font-bold flex items-center gap-3 hover:bg-gray-700 w-full max-w-md mx-auto justify-center text-xl transition-transform active:scale-95 border-b-4 border-gray-800";
                     btnToggle.onclick = stopScanner;
                     lucide.createIcons();
 
@@ -810,8 +812,8 @@
                     overlayDiv.classList.add('hidden');
                     switchBtn.classList.add('hidden');
 
-                    btnToggle.innerHTML = `<i data-lucide="camera" width="24"></i> เปิดกล้อง / สแกน`;
-                    btnToggle.className = "bg-blue-500 text-white px-8 py-4 rounded-xl shadow-lg font-bold flex items-center gap-3 hover:bg-blue-600 w-full max-w-md mx-auto justify-center text-lg transition-transform active:scale-95";
+                    btnToggle.innerHTML = `<i data-lucide="camera" width="28"></i> เปิดกล้อง / สแกน`;
+                    btnToggle.className = "bg-blue-600 text-white px-8 py-5 rounded-2xl shadow-xl font-bold flex items-center gap-3 hover:bg-blue-700 w-full max-w-md mx-auto justify-center text-xl transition-transform active:scale-95 border-b-4 border-blue-800";
                     btnToggle.onclick = startScanner;
                     lucide.createIcons();
                 }
