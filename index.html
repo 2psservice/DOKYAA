@@ -79,7 +79,8 @@
                 users: [],
                 inspections: [],
                 locations: [],
-                stages: []
+                stages: [],
+                vessels: []
             },
             inspection: {
                 location: null,
@@ -104,7 +105,8 @@
                 summaryType: 'daily', // daily, monthly
                 summaryDate: new Date().toISOString().split('T')[0],
                 summaryEndDate: new Date().toISOString().split('T')[0],
-                inspectorSummaryDate: new Date().toISOString().split('T')[0]
+                inspectorSummaryDate: new Date().toISOString().split('T')[0],
+                selectedVessel: 'all'
             }
         };
 
@@ -249,6 +251,12 @@
             onValue(ref(db, 'settings/stages'), (snapshot) => {
                 const val = snapshot.val();
                 state.data.stages = val ? Object.entries(val).map(([k, v]) => ({ id: k, ...v })) : [];
+                render();
+            });
+
+            onValue(ref(db, 'vessels'), (snapshot) => {
+                const val = snapshot.val();
+                state.data.vessels = val ? Object.entries(val).map(([k, v]) => ({ id: k, ...v })) : [];
                 render();
             });
 
@@ -675,6 +683,56 @@
                             const duplicateItem = history.find(i => i.stage === state.inspection.stage);
                             const isDuplicateHere = !!duplicateItem;
 
+                            // --- Vessel Lookup ---
+                            let carInfo = null;
+                            let vesselInfo = null;
+                            for (const v of state.data.vessels) {
+                                const cars = v.cars || {};
+                                const safeVin = decodedText.replace(/[.#$\[\]\/]/g, '_');
+                                if (cars[safeVin] || cars[decodedText]) {
+                                    carInfo = cars[safeVin] || cars[decodedText];
+                                    vesselInfo = v;
+                                    break;
+                                }
+                            }
+                            const allInsp = state.data.inspections.filter(i => i.vin === decodedText);
+                            const yardDone = allInsp.some(i => i.stage && i.stage.toUpperCase() === 'YARD');
+                            const preloadDone = allInsp.some(i => i.stage && i.stage.toUpperCase().replace(/[-\s]/g, '').includes('PRELOAD'));
+                            const finalDone = allInsp.some(i => i.stage && i.stage.toUpperCase() === 'FINAL');
+                            const statusRow = (label, done) =>
+                                `<div class="flex items-center gap-3 py-1.5">
+                                    <div class="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-xs ${done ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-300'}">
+                                        ${done ? '✓' : '○'}
+                                    </div>
+                                    <span class="flex-1 text-sm ${done ? 'text-green-700 font-semibold' : 'text-gray-500'}">${label}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded font-bold ${done ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}">${done ? 'ตรวจแล้ว ✅' : 'รอตรวจ'}</span>
+                                </div>`;
+                            let vesselCardHtml = '';
+                            if (carInfo) {
+                                vesselCardHtml = `
+                                    <div class="mx-3 mb-3 rounded-xl overflow-hidden border border-indigo-200">
+                                        <div class="bg-indigo-600 px-4 py-2 text-white text-xs font-bold flex items-center gap-2">
+                                            🚢 ${vesselInfo.name}
+                                        </div>
+                                        <div class="bg-indigo-50 px-4 py-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm border-b border-indigo-100">
+                                            <span class="text-gray-500">Model</span>
+                                            <span class="font-bold text-gray-800 truncate">${carInfo.model || '-'}</span>
+                                            <span class="text-gray-500">Dest. Port</span>
+                                            <span class="font-bold text-indigo-700 text-base">${carInfo.destinationPort || '-'}</span>
+                                            <span class="text-gray-500">Port of Disch.</span>
+                                            <span class="text-gray-700 text-xs">${carInfo.portOfDischarging || '-'}</span>
+                                            <span class="text-gray-500">Gate-In</span>
+                                            <span class="text-gray-600 text-xs">${carInfo.gateInDateTime || '-'}</span>
+                                        </div>
+                                        <div class="bg-white px-4 pt-2 pb-3">
+                                            <div class="text-xs font-bold text-gray-400 uppercase mb-1">สถานะการตรวจ</div>
+                                            ${statusRow('Check in YARD', yardDone)}
+                                            ${statusRow('Check in Pre-Load', preloadDone)}
+                                            ${statusRow('Check in Final', finalDone)}
+                                        </div>
+                                    </div>`;
+                            }
+
                             const modal = div.querySelector('#scan-modal');
                             const innerModal = div.querySelector('#scan-modal-inner');
                             const content = div.querySelector('#scan-modal-content');
@@ -711,14 +769,15 @@
                                     <div class="bg-red-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
                                         <i data-lucide="x-circle"></i> ตรวจสอบซ้ำซ้อน!
                                     </div>
-                                    <div class="p-6 text-center">
+                                    <div class="p-4 text-center">
                                         <div class="text-sm text-gray-500 mb-1">VIN Number</div>
-                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-4">${decodedText}</div>
-                                        <p class="text-red-600 font-medium mb-2">รถคันนี้ถูกตรวจใน</p>
+                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
+                                        <p class="text-red-600 font-medium mb-1">รถคันนี้ถูกตรวจใน</p>
                                         <p class="text-lg font-bold text-gray-800">${duplicateItem.location}</p>
                                         <p class="text-sm font-bold bg-gray-100 inline-block px-2 py-1 rounded mt-1 uppercase">${duplicateItem.stage}</p>
                                         <p class="text-red-600 font-medium mt-2">โดย <span class="font-bold">${duplicateItem.user || 'ไม่ระบุ'}</span> ไปแล้ว!</p>
                                     </div>
+                                    ${vesselCardHtml}
                                     ${historyHtml}
                                     <div class="p-4 bg-gray-50 flex justify-center">
                                         <button id="btn-modal-close" class="bg-gray-500 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-600 w-full transition-colors">รับทราบ / สแกนใหม่</button>
@@ -730,14 +789,15 @@
                                     <div class="bg-orange-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
                                         <i data-lucide="alert-triangle"></i> รถคันนี้เคยตรวจแล้ว
                                     </div>
-                                    <div class="p-6 text-center">
+                                    <div class="p-4 text-center">
                                         <div class="text-sm text-gray-500 mb-1">VIN Number</div>
-                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-4">${decodedText}</div>
-                                        <p class="text-gray-600 text-sm mb-2">ยืนยันที่จะเปิดงานตรวจใหม่สำหรับ</p>
+                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
+                                        <p class="text-gray-600 text-sm mb-1">ยืนยันที่จะเปิดงานตรวจใหม่สำหรับ</p>
                                         <p class="text-lg font-bold text-blue-700">${state.inspection.location}</p>
                                         <p class="text-sm font-bold bg-blue-50 text-blue-800 inline-block px-2 py-1 rounded mt-1 uppercase">${state.inspection.stage}</p>
                                         <p class="text-gray-600 text-sm mt-2">หรือไม่?</p>
                                     </div>
+                                    ${vesselCardHtml}
                                     ${historyHtml}
                                     <div class="p-4 bg-gray-50 flex gap-3">
                                         <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
@@ -750,17 +810,19 @@
                                     <div class="bg-green-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
                                         <i data-lucide="check-circle"></i> สแกนสำเร็จ
                                     </div>
-                                    <div class="p-6 text-center">
+                                    <div class="p-4 text-center">
                                         <div class="text-sm text-gray-500 mb-1">VIN Number</div>
-                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-4">${decodedText}</div>
-                                        <p class="text-gray-600">ไม่พบประวัติการตรวจในระบบ<br/>พร้อมเริ่มงานใหม่</p>
+                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
+                                        ${carInfo ? '' : '<p class="text-gray-600 text-sm">ไม่พบประวัติการตรวจในระบบ พร้อมเริ่มงานใหม่</p>'}
                                     </div>
+                                    ${vesselCardHtml}
                                     <div class="p-4 bg-gray-50 flex gap-3">
                                         <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
                                         <button id="btn-modal-confirm" class="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-green-700 shadow-md transition-colors">เริ่มตรวจ</button>
                                     </div>
                                 `;
                             }
+
 
                             modal.classList.remove('hidden');
                             setTimeout(() => innerModal.classList.remove('scale-95'), 10);
@@ -1559,11 +1621,12 @@
             // Changed sticky top-16 to top-0 to prevent overlapping content
             tabsContainer.className = "bg-white shadow-sm sticky top-0 z-20 border-b";
             tabsContainer.innerHTML = `
-                <div class="max-w-6xl mx-auto flex justify-around p-2">
-                     <button data-tab="users" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'users' ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="users" width="20"></i> ผู้ใช้งาน</button>
-                    <button data-tab="settings" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'settings' ? 'bg-cyan-50 text-cyan-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="settings" width="20"></i> ตั้งค่าระบบ</button>
-                    <button data-tab="report" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'report' ? 'bg-green-50 text-green-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="file-text" width="20"></i> รายงาน</button>
-                    <button data-tab="summary" class="p-2 flex-1 md:flex-none md:px-8 rounded-lg text-sm font-bold flex flex-col md:flex-row items-center gap-2 ${adminTab === 'summary' ? 'bg-purple-50 text-purple-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="bar-chart-2" width="20"></i> สรุปข้อมูล</button>
+                <div class="max-w-6xl mx-auto flex justify-around p-2 overflow-x-auto no-scrollbar">
+                     <button data-tab="users" class="p-2 flex-1 md:flex-none md:px-6 rounded-lg text-xs font-bold flex flex-col md:flex-row items-center gap-1 whitespace-nowrap ${adminTab === 'users' ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="users" width="18"></i> ผู้ใช้งาน</button>
+                    <button data-tab="vessels" class="p-2 flex-1 md:flex-none md:px-6 rounded-lg text-xs font-bold flex flex-col md:flex-row items-center gap-1 whitespace-nowrap ${adminTab === 'vessels' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="ship" width="18"></i> เรือ (Voy)</button>
+                    <button data-tab="settings" class="p-2 flex-1 md:flex-none md:px-6 rounded-lg text-xs font-bold flex flex-col md:flex-row items-center gap-1 whitespace-nowrap ${adminTab === 'settings' ? 'bg-cyan-50 text-cyan-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="settings" width="18"></i> ตั้งค่าระบบ</button>
+                    <button data-tab="report" class="p-2 flex-1 md:flex-none md:px-6 rounded-lg text-xs font-bold flex flex-col md:flex-row items-center gap-1 whitespace-nowrap ${adminTab === 'report' ? 'bg-green-50 text-green-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="file-text" width="18"></i> รายงาน</button>
+                    <button data-tab="summary" class="p-2 flex-1 md:flex-none md:px-6 rounded-lg text-xs font-bold flex flex-col md:flex-row items-center gap-1 whitespace-nowrap ${adminTab === 'summary' ? 'bg-purple-50 text-purple-600' : 'text-gray-500 hover:bg-gray-50'}"><i data-lucide="bar-chart-2" width="18"></i> สรุปข้อมูล</button>
                 </div>
             `;
 
@@ -1640,7 +1703,95 @@
                 `;
                 content.querySelector('#btn-add-loc').onclick = () => addSetting('locations', content.querySelector('#new-loc').value);
                 content.querySelector('#btn-add-stg').onclick = () => addSetting('stages', content.querySelector('#new-stg').value);
+            } else if (adminTab === 'vessels') {
+                const vesselListHtml = state.data.vessels.length === 0
+                    ? `<div class="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400 border-2 border-dashed border-gray-200 col-span-full">
+                            <i data-lucide="ship" width="48" class="mx-auto mb-3 opacity-20"></i>
+                            <p class="font-bold">ยังไม่มีเรือในระบบ</p>
+                            <p class="text-sm mt-1">กรุณาสร้างเรือใหม่ก่อน</p>
+                       </div>`
+                    : state.data.vessels.map(v => {
+                        const cars = v.cars || {};
+                        const carCount = Object.keys(cars).length;
+                        const ports = [...new Set(Object.values(cars).map(c => c.destinationPort).filter(Boolean))];
+                        const portBadges = ports.map(p => `<span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">${p}</span>`).join('');
+                        const carRows = Object.entries(cars).slice(0, 30).map(([vin, car]) =>
+                            `<div class="px-3 py-1.5 flex justify-between items-center text-xs hover:bg-gray-50">
+                                <div>
+                                    <span class="font-mono font-bold text-gray-800">${car.vinNumber || vin}</span>
+                                    <span class="text-gray-500 ml-2">${car.model || '-'}</span>
+                                </div>
+                                <span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-bold">${car.destinationPort || '-'}</span>
+                             </div>`
+                        ).join('');
+                        const moreRow = carCount > 30 ? `<div class="px-3 py-1.5 text-center text-gray-400 text-xs">... และอีก ${carCount - 30} คัน</div>` : '';
+                        return `
+                            <div class="bg-white rounded-xl shadow-md overflow-hidden border border-indigo-100">
+                                <div class="bg-indigo-600 px-5 py-3 flex justify-between items-center text-white">
+                                    <div class="flex items-center gap-2 font-bold text-base">
+                                        <i data-lucide="ship" width="18"></i> ${v.name}
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">${carCount} คัน</span>
+                                        <button class="text-red-200 hover:text-white hover:bg-red-500/40 p-1 rounded" onclick="deleteVessel('${v.id}')">
+                                            <i data-lucide="trash-2" width="14"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="p-4 space-y-3">
+                                    ${ports.length > 0 ? `<div class="flex flex-wrap gap-1.5">${portBadges}</div>` : ''}
+                                    <div class="bg-gray-50 rounded-lg border border-dashed border-gray-300 p-3">
+                                        <div class="text-xs font-bold text-gray-600 mb-1.5 flex items-center gap-1.5">
+                                            <i data-lucide="upload-cloud" width="14" class="text-green-600"></i>
+                                            อัปโหลดข้อมูลรถ (Excel)
+                                        </div>
+                                        <div class="text-xs text-gray-400 mb-2">คอลัมน์: No / Model(Desc) / Port of Discharging / Destination Port / VIN Number / Gate-In Date Time</div>
+                                        <div class="flex gap-2 flex-wrap">
+                                            <input type="file" id="excel-file-${v.id}" accept=".xlsx,.xls" class="flex-1 text-xs border border-gray-300 rounded p-1.5 bg-white min-w-0">
+                                            <button class="bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-700 flex items-center gap-1 whitespace-nowrap" onclick="uploadVesselExcel('${v.id}')">
+                                                <i data-lucide="upload" width="12"></i> นำเข้าข้อมูล
+                                            </button>
+                                        </div>
+                                    </div>
+                                    ${carCount > 0 ? `<div>
+                                        <div class="text-xs font-bold text-gray-500 uppercase mb-1.5">รายการรถ (${carCount} คัน)</div>
+                                        <div class="border rounded-lg divide-y overflow-y-auto max-h-48">${carRows}${moreRow}</div>
+                                    </div>` : ''}
+                                </div>
+                            </div>`;
+                    }).join('');
+
+                content.innerHTML = `
+                    <div class="space-y-6">
+                        <div class="bg-white rounded-xl shadow-md p-6">
+                            <h2 class="text-xl font-bold text-gray-800 mb-1 flex items-center gap-2">
+                                <i data-lucide="ship" class="text-indigo-500" width="24"></i> สร้างเรือ (Vessel / Voy)
+                            </h2>
+                            <p class="text-sm text-gray-400 mb-4">สร้างเรือก่อน แล้วอัปโหลด Excel เพื่อนำเข้าข้อมูลรถ</p>
+                             <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <input type="text" id="new-vessel-name" class="border p-2 rounded text-sm focus:border-indigo-500 outline-none" placeholder="ชื่อเรือ เช่น DOKYAA / HORIZON">
+                                <input type="text" id="new-vessel-voy" class="border p-2 rounded text-sm focus:border-indigo-500 outline-none" placeholder="Voy No. เช่น 001 / 2024-01">
+                                <button id="btn-create-vessel" class="bg-indigo-600 text-white px-5 rounded font-bold hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm">
+                                    <i data-lucide="plus"></i> สร้างเรือ
+                                </button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6" id="vessel-grid">
+                            ${vesselListHtml}
+                        </div>
+                    </div>
+                `;
+                content.querySelector('#btn-create-vessel').onclick = () => {
+                    const name = content.querySelector('#new-vessel-name').value.trim();
+                    const voyNo = content.querySelector('#new-vessel-voy').value.trim();
+                    if (!name) return alert('กรุณาใส่ชื่อเรือ');
+                    const label = voyNo ? `${name} (Voy ${voyNo})` : name;
+                    push(ref(db, 'vessels'), { name: label, shipName: name, voyNo, createdAt: new Date().toISOString(), createdBy: state.user });
+                    content.querySelector('#new-vessel-name').value = '';
+                    content.querySelector('#new-vessel-voy').value = '';
+                };
             } else if (adminTab === 'report') {
+
                 const filtered = state.data.inspections.filter(item => {
                     if (!item.date) return false;
                     return item.date >= state.filters.reportStartDate && item.date <= state.filters.reportEndDate;
@@ -1707,15 +1858,54 @@
                 const dateVal = state.filters.summaryDate;
                 const endDateVal = state.filters.summaryEndDate || dateVal;
 
-                // Filter Data
+                // Vessel filter
+                const selVessel = state.filters.selectedVessel || 'all';
+                let vesselVins = null;
+                let vesselObj = null;
+                if (selVessel !== 'all') {
+                    vesselObj = state.data.vessels.find(v => v.id === selVessel);
+                    if (vesselObj && vesselObj.cars) vesselVins = new Set(Object.keys(vesselObj.cars));
+
+                    // Auto-date: find min/max inspection dates for this vessel
+                    if (vesselVins) {
+                        const vesselInsp = state.data.inspections.filter(i => {
+                            if (!i.date) return false;
+                            const safe = (i.vin || '').replace(/[.#$\[\]\/]/g, '_');
+                            return vesselVins.has(safe) || vesselVins.has(i.vin);
+                        });
+                        if (vesselInsp.length > 0) {
+                            const dates = vesselInsp.map(i => i.date).sort();
+                            const autoMin = dates[0];
+                            const autoMax = dates[dates.length - 1];
+                            // Only auto-set if user hasn't manually changed (or if they just switched vessel)
+                            if (!state.filters._vesselAutoDate || state.filters._lastAutoVessel !== selVessel) {
+                                state.filters.summaryDate = autoMin;
+                                state.filters.summaryEndDate = autoMax;
+                                state.filters._vesselAutoDate = true;
+                                state.filters._lastAutoVessel = selVessel;
+                            }
+                        }
+                    }
+                } else {
+                    // Reset auto-date tracking when switching back to all
+                    state.filters._vesselAutoDate = false;
+                    state.filters._lastAutoVessel = null;
+                }
+
+                // Filter Data (with vessel + date)
                 const filtered = state.data.inspections.filter(item => {
                     if (!item.date) return false;
+                    if (vesselVins) {
+                        const safeVin = (item.vin || '').replace(/[.#$\[\]\/]/g, '_');
+                        if (!vesselVins.has(safeVin) && !vesselVins.has(item.vin)) return false;
+                    }
                     if (type === 'daily') {
                         return item.date >= dateVal && item.date <= endDateVal;
                     }
                     if (type === 'monthly') return item.date.startsWith(dateVal.substring(0, 7));
                     return false;
                 });
+
 
                 // --- Aggregation Logic (Updated to track items for Modals) ---
                 let totalDefects = 0;
@@ -1828,10 +2018,18 @@
                                 <div class="bg-gray-100 p-1 rounded-lg flex text-sm font-bold">
                                     <button class="px-4 py-2 rounded-md transition-colors ${type === 'daily' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}" onclick="setSummaryType('daily')">รายวัน</button>
                                     <button class="px-4 py-2 rounded-md transition-colors ${type === 'monthly' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}" onclick="setSummaryType('monthly')">รายเดือน</button>
-                                </div>
+                                 </div>
                                 <div class="flex items-center gap-2">
                                     <input type="${type === 'daily' ? 'date' : 'month'}" id="summary-date" value="${type === 'daily' ? dateVal : dateVal.substring(0, 7)}" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white outline-none focus:border-purple-500">
                                     ${type === 'daily' ? `<span class="text-gray-400">-</span><input type="date" id="summary-end-date" value="${endDateVal}" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white outline-none focus:border-purple-500">` : ''}
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <i data-lucide="ship" width="16" class="text-indigo-500"></i>
+                                    <select id="vessel-filter-select" class="border border-gray-300 rounded px-3 py-2 text-sm bg-white outline-none focus:border-indigo-500 font-bold">
+                                        <option value="all" ${selVessel === 'all' ? 'selected' : ''}>🚢 ทุกลำ</option>
+                                        ${state.data.vessels.map(v => `<option value="${v.id}" ${selVessel === v.id ? 'selected' : ''}>${v.name} (${Object.keys(v.cars || {}).length} คัน)</option>`).join('')}
+                                    </select>
+                                    <button id="btn-vessel-search" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-indigo-700 flex items-center gap-1.5 whitespace-nowrap"><i data-lucide="search" width="15"></i> ค้นหา</button>
                                 </div>
                             </div>
                             <button onclick="exportSummaryCSV()" class="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-purple-700 flex items-center gap-2"><i data-lucide="download" width="16"></i> Export Report (Excel)</button>
@@ -1861,6 +2059,16 @@
                                 <div class="text-lg font-bold text-gray-800 mt-1 truncate">${topDefectName}</div>
                                 <div class="text-xs text-gray-400">${topDefectCount > 0 ? topDefectCount + ' จุด' : '-'}</div>
                             </div>
+                        </div>
+
+                        <!-- Port Breakdown Cards (below 4 stat cards) -->
+                        <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                            <div class="p-4 bg-gray-50 border-b font-bold text-gray-700 flex items-center gap-2">
+                                <i data-lucide="anchor" class="text-blue-500" width="18"></i>
+                                สรุปตาม Port of Discharging
+                                <span class="text-xs font-normal text-gray-400">(ยอดดอกหญ้า / แมลง / มูลนก)</span>
+                            </div>
+                            <div id="port-breakdown-grid" class="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
                         </div>
 
                         <!-- Dashboard: User & Location Grids -->
@@ -1949,6 +2157,86 @@
                     </div>
                 `;
 
+                // --- Build Port Breakdown (by Port of Discharging) ---
+                (() => {
+                    const byPort = {};
+
+                    filtered.forEach(item => {
+                        let carInfo = null;
+                        for (const v of state.data.vessels) {
+                            const cars = v.cars || {};
+                            const safeVin = (item.vin || '').replace(/[.#$\[\]\/]/g, '_');
+                            if (cars[safeVin] || cars[item.vin]) {
+                                carInfo = cars[safeVin] || cars[item.vin];
+                                break;
+                            }
+                        }
+                        if (!carInfo) return;
+
+                        const port = carInfo.portOfDischarging || '\u0e44\u0e21\u0e48\u0e23\u0e30\u0e1a\u0e38';
+                        if (!byPort[port]) byPort[port] = { grass: 0, insect: 0, bird_drop: 0, carCount: 0 };
+                        byPort[port].carCount++;
+
+                        if (item.defects) {
+                            Object.values(item.defects).forEach(areaVal => {
+                                const countIn = (obj) => {
+                                    ['grass', 'insect', 'bird_drop'].forEach(k => {
+                                        if (typeof obj[k] === 'number' && obj[k] > 0) byPort[port][k] += obj[k];
+                                    });
+                                };
+                                const vals = Object.values(areaVal);
+                                if (vals.length > 0 && typeof vals[0] === 'object') {
+                                    Object.values(areaVal).forEach(sp => countIn(sp));
+                                } else {
+                                    countIn(areaVal);
+                                }
+                            });
+                        }
+                    });
+
+                    const portGrid = content.querySelector('#port-breakdown-grid');
+                    if (!portGrid) return;
+
+                    if (Object.keys(byPort).length === 0) {
+                        portGrid.innerHTML = `<div class="col-span-full text-center text-gray-400 text-sm py-6">\u0e44\u0e21\u0e48\u0e21\u0e35\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25 Port (\u0e15\u0e49\u0e2d\u0e07\u0e19\u0e33\u0e40\u0e02\u0e49\u0e32\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e40\u0e23\u0e37\u0e2d\u0e01\u0e48\u0e2d\u0e19)</div>`;
+                        return;
+                    }
+
+                    const defectInfo = [
+                        { key: 'grass', label: '\u0e14\u0e2d\u0e01\u0e2b\u0e0d\u0e49\u0e32', icon: '\ud83c\udf3f', color: 'text-green-700', bg: 'bg-green-50', border: 'border-green-100' },
+                        { key: 'insect', label: '\u0e41\u0e21\u0e25\u0e07', icon: '\ud83d\udc1b', color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
+                        { key: 'bird_drop', label: '\u0e21\u0e39\u0e25\u0e19\u0e01', icon: '\ud83d\udc26', color: 'text-gray-600', bg: 'bg-gray-50', border: 'border-gray-100' },
+                    ];
+
+                    Object.entries(byPort).sort((a, b) => a[0].localeCompare(b[0])).forEach(([port, data]) => {
+                        const card = document.createElement('div');
+                        card.className = 'border border-blue-100 rounded-xl overflow-hidden shadow-sm bg-white';
+
+                        const total = data.grass + data.insect + data.bird_drop;
+                        const rows = defectInfo.map(d => `
+                            <div class="flex items-center justify-between px-5 py-3 ${d.bg} border-b ${d.border} last:border-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-lg">${d.icon}</span>
+                                    <span class="font-bold ${d.color}">${d.label}</span>
+                                </div>
+                                <span class="text-2xl font-black ${d.color}">${data[d.key].toLocaleString()}</span>
+                            </div>`).join('');
+
+                        card.innerHTML = `
+                            <div class="bg-gradient-to-r from-blue-700 to-blue-500 px-4 py-3 text-white">
+                                <div class="flex items-center justify-between">
+                                    <div class="font-bold text-base flex items-center gap-2"><i data-lucide="ship" width="16"></i>${port}</div>
+                                    <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">${data.carCount} \u0e04\u0e31\u0e19</span>
+                                </div>
+                                <div class="text-xs text-blue-200 mt-0.5">\u0e04\u0e27\u0e32\u0e21\u0e40\u0e2a\u0e35\u0e22\u0e2b\u0e32\u0e22\u0e23\u0e27\u0e21 <span class="font-black text-white">${total.toLocaleString()}</span> \u0e08\u0e38\u0e14</div>
+                            </div>
+                            ${rows}`;
+                        portGrid.appendChild(card);
+                    });
+                    lucide.createIcons();
+                })();
+
+
                 content.querySelector('#summary-date').onchange = (e) => {
                     state.filters.summaryDate = e.target.value;
                     render();
@@ -1956,6 +2244,23 @@
                 if (type === 'daily') {
                     content.querySelector('#summary-end-date').onchange = (e) => {
                         state.filters.summaryEndDate = e.target.value;
+                        render();
+                    };
+                }
+                const vesselSel = content.querySelector('#vessel-filter-select');
+                if (vesselSel) {
+                    vesselSel.onchange = (e) => {
+                        state.filters.selectedVessel = e.target.value;
+                        state.filters._vesselAutoDate = false;
+                    };
+                }
+                const searchBtn = content.querySelector('#btn-vessel-search');
+                if (searchBtn) {
+                    searchBtn.onclick = () => {
+                        if (vesselSel) {
+                            state.filters.selectedVessel = vesselSel.value;
+                            state.filters._vesselAutoDate = false;
+                        }
                         render();
                     };
                 }
@@ -2349,7 +2654,7 @@
             const finalStageHeaders = [...stageOrder, ...otherStages];
 
             // Add Headers
-            ws4_data.push(['VIN', ...finalStageHeaders, 'วันที่ตรวจ']);
+            ws4_data.push(['VIN', ...finalStageHeaders, 'Port', 'วันที่ตรวจ']);
 
             // Add Rows
             Object.entries(byVin).forEach(([vin, stagesData]) => {
@@ -2380,6 +2685,16 @@
                     }
                 });
 
+                // Lookup Port from vessels data
+                let portStr = '-';
+                for (const v of state.data.vessels) {
+                    const cars = v.cars || {};
+                    const safeV = vin.replace(/[.#$\[\]\/]/g, '_');
+                    const car = cars[safeV] || cars[vin];
+                    if (car) { portStr = car.destinationPort || '-'; break; }
+                }
+                row.push(portStr);
+
                 const dateStr = Array.from(allDatesForVin).sort().join(', ');
                 row.push(dateStr);
 
@@ -2407,8 +2722,15 @@
                 }
             });
 
-            // Format 'วันที่ตรวจ' Header
-            const dateColIdx = finalStageHeaders.length + 1;
+            // Format 'Port' Header (column E = index finalStageHeaders.length + 1)
+            const portColIdx = finalStageHeaders.length + 1;
+            const portCellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c: portColIdx });
+            if (ws4[portCellRef]) {
+                ws4[portCellRef].s = { fill: { fgColor: { rgb: "FFE0E7FF" } }, font: { bold: true }, alignment: { horizontal: "center" } };
+            }
+
+            // Format 'วันที่ตรวจ' Header (column F = index finalStageHeaders.length + 2)
+            const dateColIdx = finalStageHeaders.length + 2;
             const dateCellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c: dateColIdx });
             if (ws4[dateCellRef]) {
                 ws4[dateCellRef].s = { font: { bold: true }, alignment: { horizontal: "center" } };
@@ -2419,6 +2741,7 @@
             finalStageHeaders.forEach(() => {
                 ws4['!cols'].push({ wch: 30 }); // Stages
             });
+            ws4['!cols'].push({ wch: 12 }); // Port
             ws4['!cols'].push({ wch: 20 }); // วันที่ตรวจ
 
             // Append sheets in desired order: ws4 goes first
@@ -2478,7 +2801,67 @@
             document.body.removeChild(link);
         }
 
+
+        window.deleteVessel = (id) => {
+            if (confirm('ยืนยันลบเรือนี้? ข้อมูลรถทั้งหมดในเรือนี้จะถูกลบด้วย')) {
+                remove(ref(db, `vessels/${id}`));
+            }
+        };
+
+        window.uploadVesselExcel = (vesselId) => {
+            const fileInput = document.getElementById(`excel-file-${vesselId}`);
+            if (!fileInput || !fileInput.files[0]) return alert('กรุณาเลือกไฟล์ Excel ก่อน');
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const wb = XLSX.read(e.target.result, { type: 'array' });
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+                    if (rows.length < 2) return alert('ไฟล์ไม่มีข้อมูล');
+
+                    // Auto-detect columns from header row
+                    const headerRow = rows[0];
+                    let vinCol = 4, modelCol = 1, podCol = 2, destPortCol = 3, gateInCol = 5, noCol = 0;
+                    headerRow.forEach((h, i) => {
+                        const hs = String(h).toLowerCase().trim();
+                        if (hs.includes('vin')) vinCol = i;
+                        else if (hs.includes('model') || hs.includes('description')) modelCol = i;
+                        else if (hs.includes('discharging') || hs.includes('port of dis')) podCol = i;
+                        else if (hs.includes('destination')) destPortCol = i;
+                        else if (hs.includes('gate') || hs.includes('date time')) gateInCol = i;
+                        else if (hs === 'no' || hs === 'no.' || hs === '#') noCol = i;
+                    });
+
+                    const updates = {};
+                    let importCount = 0;
+                    for (let i = 1; i < rows.length; i++) {
+                        const row = rows[i];
+                        const vin = String(row[vinCol] || '').trim();
+                        if (!vin) continue;
+                        const safeVin = vin.replace(/[.#$\[\]\/]/g, '_');
+                        updates[`vessels/${vesselId}/cars/${safeVin}`] = {
+                            no: String(row[noCol] || '').trim(),
+                            model: String(row[modelCol] || '').trim(),
+                            portOfDischarging: String(row[podCol] || '').trim(),
+                            destinationPort: String(row[destPortCol] || '').trim(),
+                            vinNumber: vin,
+                            gateInDateTime: String(row[gateInCol] || '').trim()
+                        };
+                        importCount++;
+                    }
+                    if (importCount === 0) return alert('ไม่พบข้อมูล VIN ในไฟล์');
+                    await update(ref(db, '/'), updates);
+                    alert(`✅ นำเข้าข้อมูลสำเร็จ! ${importCount} คัน`);
+                } catch (err) {
+                    alert('เกิดข้อผิดพลาด: ' + err.message);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        };
+
         initApp();
+
 
     </script>
 </body>
