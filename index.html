@@ -2597,11 +2597,86 @@
                 ws3 = XLSX.utils.aoa_to_sheet(ws3_data);
             }
 
-            // --- Sheet 4: Inspection Rounds per VIN ---
+            // --- Sheet 4: Inspection Rounds per VIN (with Summary at top) ---
+            // Vessel name for header
+            const selV = state.filters.selectedVessel;
+            const vesselForExport = selV && selV !== 'all' ? state.data.vessels.find(v => v.id === selV) : null;
+            const vesselLabel = vesselForExport ? ` | เรือ: ${vesselForExport.name}${vesselForExport.voyNo ? '  Voy: ' + vesselForExport.voyNo : ''}` : '';
+
             const ws4_data = [];
-            ws4_data.push([`สรุปข้อมูลประจำ: ${type === 'daily' ? 'รายวัน' : 'รายเดือน'} (${dateStrLabel})`]);
+            ws4_data.push([`สรุปข้อมูลประจำ: ${type === 'daily' ? 'รายวัน' : 'รายเดือน'} (${dateStrLabel})${vesselLabel}`]);
             ws4_data.push([]);
-            ws4_data.push(['--- 1. สรุปรอบการตรวจรายคัน (จำนวนปัญหาที่พบ) ---']);
+
+            // --- Compute summary stats for ws4 header block ---
+            const expUniqueVins = new Set();
+            const expByPart = {};
+            const expByDefType = { grass: 0, insect: 0, bird_drop: 0 };
+            const expByPod = {}; // Port of Discharging
+
+            filtered.forEach(item => {
+                expUniqueVins.add(item.vin);
+
+                // Lookup portOfDischarging
+                let carInfo = null;
+                for (const v of state.data.vessels) {
+                    const cars = v.cars || {};
+                    const safeVin2 = (item.vin || '').replace(/[.#$\[\]\/]/g, '_');
+                    if (cars[safeVin2] || cars[item.vin]) { carInfo = cars[safeVin2] || cars[item.vin]; break; }
+                }
+                const pod = carInfo ? (carInfo.portOfDischarging || 'ไม่ระบุ') : null;
+                if (pod) {
+                    if (!expByPod[pod]) expByPod[pod] = { grass: 0, insect: 0, bird_drop: 0, vins: new Set() };
+                    expByPod[pod].vins.add(item.vin);
+                }
+
+                if (item.defects) {
+                    Object.entries(item.defects).forEach(([areaId, areaVal]) => {
+                        const areaObj = INSPECTION_AREAS.find(a => a.id == areaId);
+                        const countDefect = (partKey, counts) => {
+                            if (!expByPart[partKey]) expByPart[partKey] = 0;
+                            ['grass', 'insect', 'bird_drop'].forEach(k => {
+                                const v = typeof counts[k] === 'number' ? counts[k] : 0;
+                                if (v > 0) { expByPart[partKey] += v; expByDefType[k] += v; if (pod) expByPod[pod][k] += v; }
+                            });
+                        };
+                        if (areaObj && areaObj.subparts) {
+                            Object.entries(areaVal).forEach(([spId, spCounts]) => {
+                                const spObj = areaObj.subparts.find(s => s.id === spId);
+                                countDefect(spObj ? (spObj.th || spObj.en) : spId, spCounts);
+                            });
+                        } else {
+                            countDefect(areaObj ? (areaObj.th || areaObj.en) : areaId, areaVal);
+                        }
+                    });
+                }
+            });
+
+            const expTotalDefects = expByDefType.grass + expByDefType.insect + expByDefType.bird_drop;
+            const expTopPart = Object.entries(expByPart).sort((a, b) => b[1] - a[1])[0] || ['-', 0];
+            const defTypeNames = { grass: 'ดอกหญ้า', insect: 'แมลง', bird_drop: 'มูลนก' };
+            const expTopDefType = Object.entries(expByDefType).sort((a, b) => b[1] - a[1])[0] || ['grass', 0];
+
+            // === SUMMARY BLOCK: Overall Stats ===
+            ws4_data.push(['═══ สรุปภาพรวม ═══']);
+            ws4_data.push(['จำนวนรถที่ตรวจ', `${expUniqueVins.size} คัน`]);
+            ws4_data.push(['ความเสียหายรวม', `${expTotalDefects} จุด`]);
+            ws4_data.push(['ชิ้นส่วนที่พบมากสุด', expTopPart[0], `${expTopPart[1]} จุด`]);
+            ws4_data.push(['รายการที่พบมากสุด', defTypeNames[expTopDefType[0]] || expTopDefType[0], `${expTopDefType[1]} จุด`]);
+            ws4_data.push([]);
+
+            // === SUMMARY BLOCK: Per Port of Discharging ===
+            if (Object.keys(expByPod).length > 0) {
+                ws4_data.push(['═══ สรุปตาม Port of Discharging ═══']);
+                ws4_data.push(['Port', 'จำนวนรถ', 'ความเสียหายรวม', 'ดอกหญ้า', 'แมลง', 'มูลนก']);
+                Object.entries(expByPod).sort((a, b) => a[0].localeCompare(b[0])).forEach(([pod, d]) => {
+                    const tot = d.grass + d.insect + d.bird_drop;
+                    ws4_data.push([pod, d.vins.size, tot, d.grass, d.insect, d.bird_drop]);
+                });
+                ws4_data.push([]);
+            }
+
+            ws4_data.push([]);
+            ws4_data.push(['--- สรุปรอบการตรวจรายคัน (จำนวนปัญหาที่พบ) ---']);
 
             // Helper function to format defects to Thai string
             const getDefectDetails = (defectsObj) => {
@@ -2710,8 +2785,7 @@
             const ws4 = XLSX.utils.aoa_to_sheet(ws4_data);
 
             // Add Styles for YARD, PRE-LOAD, FINAL
-            // find the row where headers are: ws4_data[3] has them
-            const headerRowIdx = 3;
+            const headerRowIdx = ws4_data.indexOf(ws4_data.find(r => r[0] === 'VIN'));
             // SheetJS by default doesn't render `.s` styles without pro version
             // However, depending on the builder it might work, or if not, the user will still have data
             finalStageHeaders.forEach((stg, index) => {
@@ -2758,11 +2832,130 @@
             ws4['!cols'].push({ wch: 14 }); // F: Port (Dest.)
             ws4['!cols'].push({ wch: 20 }); // G: วันที่ตรวจ
 
+            // === Excel Sheet Styling Helper ===
+            const _thin = { style: 'thin', color: { rgb: 'FFD1D5DB' } };
+            const _borderAll = { top: _thin, bottom: _thin, left: _thin, right: _thin };
+            const styleExcelSheet = (ws) => {
+                if (!ws || !ws['!ref']) return;
+                const range = XLSX.utils.decode_range(ws['!ref']);
+                const headerRows = new Set();
+                const sectionRows = new Set();
+                // Identify header and section rows by col-A content
+                for (let R = range.s.r; R <= range.e.r; R++) {
+                    const c0 = XLSX.utils.encode_cell({ r: R, c: 0 });
+                    const v = ws[c0] ? String(ws[c0].v || '').trim() : '';
+                    if (['Port', 'VIN', 'พนักงาน', 'สถานที่', 'Stage', 'ชิ้นส่วน'].includes(v) ||
+                        v === 'ผ่านท่า' || v === 'สถานที่' || v === 'VIN') {
+                        headerRows.add(R);
+                    } else if (v.startsWith('═')) {
+                        sectionRows.add(R);
+                    }
+                }
+                for (let R = range.s.r; R <= range.e.r; R++) {
+                    let rowHasData = false;
+                    for (let C = range.s.c; C <= range.e.c; C++) {
+                        const ref = XLSX.utils.encode_cell({ r: R, c: C });
+                        if (ws[ref] && ws[ref].v !== '' && ws[ref].v !== undefined) { rowHasData = true; break; }
+                    }
+                    if (!rowHasData) continue;
+                    for (let C = range.s.c; C <= range.e.c; C++) {
+                        const ref = XLSX.utils.encode_cell({ r: R, c: C });
+                        if (!ws[ref]) ws[ref] = { v: '', t: 's' };
+                        const ex = ws[ref].s || {};
+                        if (headerRows.has(R)) {
+                            ws[ref].s = { fill: { patternType: 'solid', fgColor: { rgb: 'FF1E3A5F' } }, font: { bold: true, color: { rgb: 'FFFFFFFF' }, sz: 11 }, alignment: { horizontal: 'center', vertical: 'center' }, border: _borderAll };
+                        } else if (sectionRows.has(R)) {
+                            ws[ref].s = { fill: { patternType: 'solid', fgColor: { rgb: 'FFE8EFF7' } }, font: { bold: true, color: { rgb: 'FF1E3A5F' } }, alignment: { horizontal: 'left', vertical: 'center' }, border: _borderAll };
+                        } else {
+                            ws[ref].s = { ...ex, border: _borderAll, alignment: { ...(ex.alignment || {}), vertical: 'center' } };
+                        }
+                    }
+                }
+            };
+
             // Append sheets in desired order: ws4 goes first
-            XLSX.utils.book_append_sheet(wb, ws4, "สรุปทุกStage(หน้าแรก)");
-            XLSX.utils.book_append_sheet(wb, ws1, "สถานที่และStage");
-            XLSX.utils.book_append_sheet(wb, ws2, "พนักงาน");
-            if (ws3) XLSX.utils.book_append_sheet(wb, ws3, "ความเสียหายรายชิ้นส่วน");
+            styleExcelSheet(ws4);
+            XLSX.utils.book_append_sheet(wb, ws4, 'สรุปทุกStage(หน้าแรก)');
+            styleExcelSheet(ws1);
+            XLSX.utils.book_append_sheet(wb, ws1, 'สถานที่และStage');
+            styleExcelSheet(ws2);
+            XLSX.utils.book_append_sheet(wb, ws2, 'พนักงาน');
+            if (ws3) { styleExcelSheet(ws3); XLSX.utils.book_append_sheet(wb, ws3, 'ความเสียหายรายชิ้นส่วน'); }
+
+            // --- Per-Stage Sheets ---
+            // Collect all stages present in filtered data
+            const stageOrderEx = ['YARD', 'PRE-LOAD', 'FINAL'];
+            const allStagesEx = new Set(filtered.map(i => (i.stage || 'UNKNOWN').toUpperCase()));
+            const stagesForSheets = [...stageOrderEx.filter(s => allStagesEx.has(s)), ...Array.from(allStagesEx).filter(s => !stageOrderEx.includes(s)).sort()];
+
+            stagesForSheets.forEach(stage => {
+                const stageItems = filtered.filter(i => (i.stage || 'UNKNOWN').toUpperCase() === stage);
+
+                // Group by Port of Discharging
+                const byPodStage = {};
+                stageItems.forEach(item => {
+                    let carInfo = null;
+                    for (const v of state.data.vessels) {
+                        const cars = v.cars || {};
+                        const sv = (item.vin || '').replace(/[.#$\[\]\/]/g, '_');
+                        if (cars[sv] || cars[item.vin]) { carInfo = cars[sv] || cars[item.vin]; break; }
+                    }
+                    const pod = carInfo ? (carInfo.portOfDischarging || 'ไม่ระบุ') : 'ไม่ระบุ';
+                    if (!byPodStage[pod]) byPodStage[pod] = { grass: 0, insect: 0, bird_drop: 0, vins: [] };
+                    byPodStage[pod].vins.push(item.vin);
+
+                    if (item.defects) {
+                        Object.values(item.defects).forEach(areaVal => {
+                            const countIt = (obj) => {
+                                ['grass', 'insect', 'bird_drop'].forEach(k => {
+                                    if (typeof obj[k] === 'number' && obj[k] > 0) byPodStage[pod][k] += obj[k];
+                                });
+                            };
+                            const vals = Object.values(areaVal);
+                            if (vals.length > 0 && typeof vals[0] === 'object') {
+                                Object.values(areaVal).forEach(sp => countIt(sp));
+                            } else { countIt(areaVal); }
+                        });
+                    }
+                });
+
+                const ws_stg = [];
+                ws_stg.push([`Stage: ${stage}${vesselLabel} | ${type === 'daily' ? 'รายวัน' : 'รายเดือน'} (${dateStrLabel})`]);
+                ws_stg.push([]);
+
+                // === SUMMARY TABLE (all ports) ===
+                ws_stg.push([`═══ สรุปตาม Port of Discharging (${stage}) ═══`]);
+                ws_stg.push(['Port', 'จำนวนรถ (คัน)', 'ความเสียหายรวม', 'ดอกหญ้า', 'แมลง', 'มูลนก']);
+
+                const sortedPods = Object.entries(byPodStage).sort((a, b) => a[0].localeCompare(b[0]));
+                sortedPods.forEach(([pod, d]) => {
+                    const tot = d.grass + d.insect + d.bird_drop;
+                    const uniqueVins = [...new Set(d.vins)];
+                    ws_stg.push([pod, uniqueVins.length, tot, d.grass, d.insect, d.bird_drop]);
+                });
+
+                ws_stg.push([]);
+                ws_stg.push([]);
+
+                // === VIN DETAIL SECTION (per port) ===
+                ws_stg.push([`═══ รายละเอียดเลข VIN แยกตาม Port (${stage}) ═══`]);
+                ws_stg.push(['Port', 'VIN']);
+
+                sortedPods.forEach(([pod, d]) => {
+                    const uniqueVins = [...new Set(d.vins)];
+                    uniqueVins.forEach((vin, idx) => {
+                        ws_stg.push([idx === 0 ? pod : '', vin]);
+                    });
+                    ws_stg.push([]); // spacer between ports
+                });
+
+                const wsStgSheet = XLSX.utils.aoa_to_sheet(ws_stg);
+                wsStgSheet['!cols'] = [{ wch: 20 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 8 }, { wch: 8 }];
+                styleExcelSheet(wsStgSheet);
+                const safeSheetName = stage.replace(/[:\/?*\[\]]/g, '-').substring(0, 31);
+                XLSX.utils.book_append_sheet(wb, wsStgSheet, safeSheetName);
+            });
+
 
             // Export to File (Real .xlsx file)
             XLSX.writeFile(wb, `summary_dashboard_${type}_${dateVal}.xlsx`);
