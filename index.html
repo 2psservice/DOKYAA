@@ -643,6 +643,20 @@
                     <button id="btn-toggle-scan" class="bg-blue-600 text-white px-8 py-5 rounded-2xl shadow-xl font-bold flex items-center gap-3 hover:bg-blue-700 w-full max-w-md mx-auto justify-center text-xl transition-transform active:scale-95 border-b-4 border-blue-800">
                         <i data-lucide="camera" width="28"></i> เปิดกล้อง / สแกน
                     </button>
+                    <div class="flex items-center gap-3 w-full max-w-md my-4">
+                        <div class="flex-1 h-px bg-gray-200"></div>
+                        <span class="text-xs text-gray-400 font-bold whitespace-nowrap">หรือพิมพ์ VIN 5 ตัวท้าย</span>
+                        <div class="flex-1 h-px bg-gray-200"></div>
+                    </div>
+                    <div class="flex gap-2 w-full max-w-md">
+                        <input id="vin-manual-input" type="text" inputmode="text" maxlength="17"
+                            placeholder="เช่น AB123 หรือ VIN เต็ม..."
+                            class="flex-1 border-2 border-gray-200 rounded-xl px-4 py-3 text-base font-mono text-center focus:border-blue-400 outline-none uppercase tracking-widest bg-white shadow-sm">
+                        <button id="btn-vin-search" class="bg-indigo-600 text-white px-5 rounded-xl font-bold hover:bg-indigo-700 flex items-center gap-1.5 shadow-md whitespace-nowrap">
+                            <i data-lucide="search" width="20"></i>
+                        </button>
+                    </div>
+                    <div id="vin-search-msg" class="text-xs text-red-500 mt-1 hidden">ไม่พบ VIN ที่ตรงกัน</div>
                 </div>
                 <!-- Custom Modal for Scan Result -->
                 <div id="scan-modal" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 hidden backdrop-blur-sm pointer-events-auto">
@@ -659,6 +673,141 @@
             const placeholderDiv = div.querySelector('#placeholder');
             const overlayDiv = div.querySelector('#scanning-overlay');
             const switchBtn = div.querySelector('#btn-switch-cam');
+            const modal = div.querySelector('#scan-modal');
+            const innerModal = div.querySelector('#scan-modal-inner');
+            const content = div.querySelector('#scan-modal-content');
+
+            // ---- processVin: shared handler for QR scan + manual entry ----
+            const processVin = (decodedText) => {
+                decodedText = (decodedText || '').trim().toUpperCase();
+                // Get ALL history for this VIN
+                const history = state.data.inspections.filter(i => i.vin === decodedText);
+                const duplicateItem = history.find(i => i.stage === state.inspection.stage);
+                const isDuplicateHere = !!duplicateItem;
+
+                // --- Vessel Lookup ---
+                let carInfo = null;
+                let vesselInfo = null;
+                for (const v of state.data.vessels) {
+                    const cars = v.cars || {};
+                    const safeVin = decodedText.replace(/[.#$\[\]\/]/g, '_');
+                    if (cars[safeVin] || cars[decodedText]) {
+                        carInfo = cars[safeVin] || cars[decodedText];
+                        vesselInfo = v;
+                        break;
+                    }
+                }
+                const allInsp = state.data.inspections.filter(i => i.vin === decodedText);
+                const yardDone = allInsp.some(i => i.stage && i.stage.toUpperCase() === 'YARD');
+                const preloadDone = allInsp.some(i => i.stage && i.stage.toUpperCase().replace(/[-\s]/g, '').includes('PRELOAD'));
+                const finalDone = allInsp.some(i => i.stage && i.stage.toUpperCase() === 'FINAL');
+                const statusRow = (label, done) => `
+                    <div class="flex items-center gap-3 py-1.5">
+                        <div class="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-xs ${done ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-300'}">${done ? '✓' : '○'}</div>
+                        <span class="flex-1 text-sm ${done ? 'text-green-700 font-semibold' : 'text-gray-500'}">${label}</span>
+                        <span class="text-xs px-2 py-0.5 rounded font-bold ${done ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}">${done ? 'ตรวจแล้ว ✅' : 'รอตรวจ'}</span>
+                    </div>`;
+
+                let vesselCardHtml = '';
+                if (carInfo) {
+                    vesselCardHtml = `
+                        <div class="mx-3 mb-3 rounded-xl overflow-hidden border border-indigo-200">
+                            <div class="bg-indigo-600 px-4 py-2 text-white text-xs font-bold flex items-center gap-2">🚢 ${vesselInfo.name}</div>
+                            <div class="bg-indigo-50 px-4 py-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm border-b border-indigo-100">
+                                <span class="text-gray-500">Model</span><span class="font-bold text-gray-800 truncate">${carInfo.model || '-'}</span>
+                                <span class="text-gray-500">Dest. Port</span><span class="font-bold text-indigo-700 text-base">${carInfo.destinationPort || '-'}</span>
+                                <span class="text-gray-500">Port of Disch.</span><span class="text-gray-700 text-xs">${carInfo.portOfDischarging || '-'}</span>
+                                <span class="text-gray-500">Gate-In</span><span class="text-gray-600 text-xs">${carInfo.gateInDateTime || '-'}</span>
+                            </div>
+                            <div class="bg-white px-4 pt-2 pb-3">
+                                <div class="text-xs font-bold text-gray-400 uppercase mb-1">สถานะการตรวจ</div>
+                                ${statusRow('Check in YARD', yardDone)}
+                                ${statusRow('Check in Pre-Load', preloadDone)}
+                                ${statusRow('Check in Final', finalDone)}
+                            </div>
+                        </div>`;
+                }
+
+                // Generate History HTML
+                let historyHtml = '';
+                if (history.length > 0) {
+                    const sortedHistory = [...history].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                    historyHtml = `
+                        <div class="bg-gray-50 p-4 border-t border-b border-gray-200 max-h-48 overflow-y-auto no-scrollbar">
+                            <div class="text-xs font-bold text-gray-500 mb-2 uppercase flex items-center gap-1"><i data-lucide="history" width="14"></i> ประวัติการตรวจ (${history.length} ครั้ง)</div>
+                            <div class="space-y-2">
+                                ${sortedHistory.map(h => `
+                                    <div class="bg-white p-3 rounded-lg border border-gray-200 shadow-sm text-sm">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-blue-700 text-base">${h.location}</span>
+                                            <span class="bg-blue-100 text-blue-800 text-[10px] px-2 py-1 rounded uppercase font-bold">${h.stage}</span>
+                                        </div>
+                                        <div class="flex justify-between text-xs text-gray-500">
+                                            <span class="flex items-center gap-1"><i data-lucide="calendar" width="12"></i> ${h.date || '-'}</span>
+                                            <span class="flex items-center gap-1"><i data-lucide="user" width="12"></i> ${h.user || 'ไม่ระบุ'}</span>
+                                        </div>
+                                    </div>`).join('')}
+                            </div>
+                        </div>`;
+                }
+
+                if (isDuplicateHere) {
+                    content.innerHTML = `
+                        <div class="bg-red-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2"><i data-lucide="x-circle"></i> ตรวจสอบซ้ำซ้อน!</div>
+                        <div class="p-4 text-center">
+                            <div class="text-sm text-gray-500 mb-1">VIN Number</div>
+                            <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
+                            <p class="text-red-600 font-medium mb-1">รถคันนี้ถูกตรวจใน</p>
+                            <p class="text-lg font-bold text-gray-800">${duplicateItem.location}</p>
+                            <p class="text-sm font-bold bg-gray-100 inline-block px-2 py-1 rounded mt-1 uppercase">${duplicateItem.stage}</p>
+                            <p class="text-red-600 font-medium mt-2">โดย <span class="font-bold">${duplicateItem.user || 'ไม่ระบุ'}</span> ไปแล้ว!</p>
+                        </div>
+                        ${vesselCardHtml}${historyHtml}
+                        <div class="p-4 bg-gray-50 flex justify-center">
+                            <button id="btn-modal-close" class="bg-gray-500 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-600 w-full transition-colors">รับทราบ / สแกนใหม่</button>
+                        </div>`;
+                } else if (history.length > 0) {
+                    content.innerHTML = `
+                        <div class="bg-orange-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2"><i data-lucide="alert-triangle"></i> รถคันนี้เคยตรวจแล้ว</div>
+                        <div class="p-4 text-center">
+                            <div class="text-sm text-gray-500 mb-1">VIN Number</div>
+                            <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
+                            <p class="text-gray-600 text-sm mb-1">ยืนยันที่จะเปิดงานตรวจใหม่สำหรับ</p>
+                            <p class="text-lg font-bold text-blue-700">${state.inspection.location}</p>
+                            <p class="text-sm font-bold bg-blue-50 text-blue-800 inline-block px-2 py-1 rounded mt-1 uppercase">${state.inspection.stage}</p>
+                            <p class="text-gray-600 text-sm mt-2">หรือไม่?</p>
+                        </div>
+                        ${vesselCardHtml}${historyHtml}
+                        <div class="p-4 bg-gray-50 flex gap-3">
+                            <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
+                            <button id="btn-modal-confirm" class="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-blue-700 shadow-md transition-colors">ยืนยันเริ่มตรวจ</button>
+                        </div>`;
+                } else {
+                    content.innerHTML = `
+                        <div class="bg-green-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2"><i data-lucide="check-circle"></i> พบ VIN แล้ว!</div>
+                        <div class="p-4 text-center">
+                            <div class="text-sm text-gray-500 mb-1">VIN Number</div>
+                            <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
+                            ${carInfo ? '' : '<p class="text-gray-600 text-sm">ไม่พบประวัติในระบบ พร้อมเริ่มงานใหม่</p>'}
+                        </div>
+                        ${vesselCardHtml}
+                        <div class="p-4 bg-gray-50 flex gap-3">
+                            <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
+                            <button id="btn-modal-confirm" class="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-green-700 shadow-md transition-colors">เริ่มตรวจ</button>
+                        </div>`;
+                }
+
+                modal.classList.remove('hidden');
+                setTimeout(() => innerModal.classList.remove('scale-95'), 10);
+                lucide.createIcons();
+
+                const closeBtn = div.querySelector('#btn-modal-close');
+                if (closeBtn) closeBtn.onclick = () => { innerModal.classList.add('scale-95'); setTimeout(() => { modal.classList.add('hidden'); }, 200); };
+                const cancelBtn = div.querySelector('#btn-modal-cancel');
+                if (cancelBtn) cancelBtn.onclick = () => { innerModal.classList.add('scale-95'); setTimeout(() => { modal.classList.add('hidden'); }, 200); };
+                const confirmBtn = div.querySelector('#btn-modal-confirm');
+                if (confirmBtn) confirmBtn.onclick = () => { modal.classList.add('hidden'); state.inspection.vin = decodedText; saveDraft(); state.currentScreen = 'inspection_list'; render(); };
+            };
 
             const startScanner = async () => {
                 try {
@@ -676,181 +825,10 @@
                         { fps: 10, qrbox: { width: 250, height: 250 } },
                         (decodedText) => {
                             stopScanner();
-
-                            // Get ALL history for this VIN
-                            const history = state.data.inspections.filter(i => i.vin === decodedText);
-                            // Check if duplicate in EXACTLY this stage
-                            const duplicateItem = history.find(i => i.stage === state.inspection.stage);
-                            const isDuplicateHere = !!duplicateItem;
-
-                            // --- Vessel Lookup ---
-                            let carInfo = null;
-                            let vesselInfo = null;
-                            for (const v of state.data.vessels) {
-                                const cars = v.cars || {};
-                                const safeVin = decodedText.replace(/[.#$\[\]\/]/g, '_');
-                                if (cars[safeVin] || cars[decodedText]) {
-                                    carInfo = cars[safeVin] || cars[decodedText];
-                                    vesselInfo = v;
-                                    break;
-                                }
-                            }
-                            const allInsp = state.data.inspections.filter(i => i.vin === decodedText);
-                            const yardDone = allInsp.some(i => i.stage && i.stage.toUpperCase() === 'YARD');
-                            const preloadDone = allInsp.some(i => i.stage && i.stage.toUpperCase().replace(/[-\s]/g, '').includes('PRELOAD'));
-                            const finalDone = allInsp.some(i => i.stage && i.stage.toUpperCase() === 'FINAL');
-                            const statusRow = (label, done) =>
-                                `<div class="flex items-center gap-3 py-1.5">
-                                    <div class="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-xs ${done ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-300'}">
-                                        ${done ? '✓' : '○'}
-                                    </div>
-                                    <span class="flex-1 text-sm ${done ? 'text-green-700 font-semibold' : 'text-gray-500'}">${label}</span>
-                                    <span class="text-xs px-2 py-0.5 rounded font-bold ${done ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}">${done ? 'ตรวจแล้ว ✅' : 'รอตรวจ'}</span>
-                                </div>`;
-                            let vesselCardHtml = '';
-                            if (carInfo) {
-                                vesselCardHtml = `
-                                    <div class="mx-3 mb-3 rounded-xl overflow-hidden border border-indigo-200">
-                                        <div class="bg-indigo-600 px-4 py-2 text-white text-xs font-bold flex items-center gap-2">
-                                            🚢 ${vesselInfo.name}
-                                        </div>
-                                        <div class="bg-indigo-50 px-4 py-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm border-b border-indigo-100">
-                                            <span class="text-gray-500">Model</span>
-                                            <span class="font-bold text-gray-800 truncate">${carInfo.model || '-'}</span>
-                                            <span class="text-gray-500">Dest. Port</span>
-                                            <span class="font-bold text-indigo-700 text-base">${carInfo.destinationPort || '-'}</span>
-                                            <span class="text-gray-500">Port of Disch.</span>
-                                            <span class="text-gray-700 text-xs">${carInfo.portOfDischarging || '-'}</span>
-                                            <span class="text-gray-500">Gate-In</span>
-                                            <span class="text-gray-600 text-xs">${carInfo.gateInDateTime || '-'}</span>
-                                        </div>
-                                        <div class="bg-white px-4 pt-2 pb-3">
-                                            <div class="text-xs font-bold text-gray-400 uppercase mb-1">สถานะการตรวจ</div>
-                                            ${statusRow('Check in YARD', yardDone)}
-                                            ${statusRow('Check in Pre-Load', preloadDone)}
-                                            ${statusRow('Check in Final', finalDone)}
-                                        </div>
-                                    </div>`;
-                            }
-
-                            const modal = div.querySelector('#scan-modal');
-                            const innerModal = div.querySelector('#scan-modal-inner');
-                            const content = div.querySelector('#scan-modal-content');
-
-                            // Generate History HTML
-                            let historyHtml = '';
-                            if (history.length > 0) {
-                                // Sort history newest first
-                                const sortedHistory = [...history].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                                historyHtml = `
-                                    <div class="bg-gray-50 p-4 border-t border-b border-gray-200 max-h-48 overflow-y-auto no-scrollbar">
-                                        <div class="text-xs font-bold text-gray-500 mb-2 uppercase flex items-center gap-1"><i data-lucide="history" width="14"></i> ประวัติการตรวจ (${history.length} ครั้ง)</div>
-                                        <div class="space-y-2">
-                                            ${sortedHistory.map(h => `
-                                                <div class="bg-white p-3 rounded-lg border border-gray-200 shadow-sm text-sm">
-                                                    <div class="flex justify-between items-center mb-2">
-                                                        <span class="font-bold text-blue-700 text-base">${h.location}</span>
-                                                        <span class="bg-blue-100 text-blue-800 text-[10px] px-2 py-1 rounded uppercase font-bold">${h.stage}</span>
-                                                    </div>
-                                                    <div class="flex justify-between text-xs text-gray-500">
-                                                        <span class="flex items-center gap-1"><i data-lucide="calendar" width="12"></i> ${h.date || '-'}</span>
-                                                        <span class="flex items-center gap-1"><i data-lucide="user" width="12"></i> ${h.user || 'ไม่ระบุ'}</span>
-                                                    </div>
-                                                </div>
-                                            `).join('')}
-                                        </div>
-                                    </div>
-                                `;
-                            }
-
-                            if (isDuplicateHere) {
-                                // Block exact duplicate
-                                content.innerHTML = `
-                                    <div class="bg-red-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
-                                        <i data-lucide="x-circle"></i> ตรวจสอบซ้ำซ้อน!
-                                    </div>
-                                    <div class="p-4 text-center">
-                                        <div class="text-sm text-gray-500 mb-1">VIN Number</div>
-                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
-                                        <p class="text-red-600 font-medium mb-1">รถคันนี้ถูกตรวจใน</p>
-                                        <p class="text-lg font-bold text-gray-800">${duplicateItem.location}</p>
-                                        <p class="text-sm font-bold bg-gray-100 inline-block px-2 py-1 rounded mt-1 uppercase">${duplicateItem.stage}</p>
-                                        <p class="text-red-600 font-medium mt-2">โดย <span class="font-bold">${duplicateItem.user || 'ไม่ระบุ'}</span> ไปแล้ว!</p>
-                                    </div>
-                                    ${vesselCardHtml}
-                                    ${historyHtml}
-                                    <div class="p-4 bg-gray-50 flex justify-center">
-                                        <button id="btn-modal-close" class="bg-gray-500 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-600 w-full transition-colors">รับทราบ / สแกนใหม่</button>
-                                    </div>
-                                `;
-                            } else if (history.length > 0) {
-                                // Allow if different location/stage
-                                content.innerHTML = `
-                                    <div class="bg-orange-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
-                                        <i data-lucide="alert-triangle"></i> รถคันนี้เคยตรวจแล้ว
-                                    </div>
-                                    <div class="p-4 text-center">
-                                        <div class="text-sm text-gray-500 mb-1">VIN Number</div>
-                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
-                                        <p class="text-gray-600 text-sm mb-1">ยืนยันที่จะเปิดงานตรวจใหม่สำหรับ</p>
-                                        <p class="text-lg font-bold text-blue-700">${state.inspection.location}</p>
-                                        <p class="text-sm font-bold bg-blue-50 text-blue-800 inline-block px-2 py-1 rounded mt-1 uppercase">${state.inspection.stage}</p>
-                                        <p class="text-gray-600 text-sm mt-2">หรือไม่?</p>
-                                    </div>
-                                    ${vesselCardHtml}
-                                    ${historyHtml}
-                                    <div class="p-4 bg-gray-50 flex gap-3">
-                                        <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
-                                        <button id="btn-modal-confirm" class="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-blue-700 shadow-md transition-colors">ยืนยันเริ่มตรวจ</button>
-                                    </div>
-                                `;
-                            } else {
-                                // New VIN completely
-                                content.innerHTML = `
-                                    <div class="bg-green-500 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
-                                        <i data-lucide="check-circle"></i> สแกนสำเร็จ
-                                    </div>
-                                    <div class="p-4 text-center">
-                                        <div class="text-sm text-gray-500 mb-1">VIN Number</div>
-                                        <div class="font-mono text-2xl font-bold text-gray-800 break-all mb-3">${decodedText}</div>
-                                        ${carInfo ? '' : '<p class="text-gray-600 text-sm">ไม่พบประวัติการตรวจในระบบ พร้อมเริ่มงานใหม่</p>'}
-                                    </div>
-                                    ${vesselCardHtml}
-                                    <div class="p-4 bg-gray-50 flex gap-3">
-                                        <button id="btn-modal-cancel" class="flex-1 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400 transition-colors">ยกเลิก</button>
-                                        <button id="btn-modal-confirm" class="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg font-bold hover:bg-green-700 shadow-md transition-colors">เริ่มตรวจ</button>
-                                    </div>
-                                `;
-                            }
-
-
-                            modal.classList.remove('hidden');
-                            setTimeout(() => innerModal.classList.remove('scale-95'), 10);
-                            lucide.createIcons();
-
-                            // Event Listeners for modal
-                            const closeBtn = div.querySelector('#btn-modal-close');
-                            if (closeBtn) closeBtn.onclick = () => {
-                                innerModal.classList.add('scale-95');
-                                setTimeout(() => { modal.classList.add('hidden'); startScanner(); }, 200);
-                            };
-
-                            const cancelBtn = div.querySelector('#btn-modal-cancel');
-                            if (cancelBtn) cancelBtn.onclick = () => {
-                                innerModal.classList.add('scale-95');
-                                setTimeout(() => { modal.classList.add('hidden'); startScanner(); }, 200);
-                            };
-
-                            const confirmBtn = div.querySelector('#btn-modal-confirm');
-                            if (confirmBtn) confirmBtn.onclick = () => {
-                                modal.classList.add('hidden');
-                                state.inspection.vin = decodedText;
-                                saveDraft();
-                                state.currentScreen = 'inspection_list';
-                                render();
-                            };
+                            processVin(decodedText);
                         },
                         (err) => { }
+
                     );
 
                     btnToggle.innerHTML = `<i data-lucide="x" width="28"></i> ปิดกล้อง`;
@@ -882,6 +860,70 @@
             };
 
             btnToggle.onclick = startScanner;
+
+            // --- Manual VIN Search (5 last digits or full VIN) ---
+            const manualInput = div.querySelector('#vin-manual-input');
+            const manualSearchBtn = div.querySelector('#btn-vin-search');
+            const vinMsg = div.querySelector('#vin-search-msg');
+
+            const doManualSearch = () => {
+                const q = (manualInput.value || '').trim().toUpperCase();
+                if (!q) return;
+                vinMsg.classList.add('hidden');
+                manualInput.style.borderColor = '';
+
+                // Collect all unique VINs from all vessel car lists
+                const allVins = [];
+                for (const v of state.data.vessels) {
+                    Object.keys(v.cars || {}).forEach(k => {
+                        const realKey = k.replace(/_/g, ' ').replace(/[.#$\[\]\/]/g, '_'); // normalize
+                        if (!allVins.includes(k)) allVins.push(k);
+                    });
+                }
+
+                // Match: ends with q (partial) OR contains q
+                const matches = allVins.filter(vin => vin.toUpperCase().endsWith(q) || (q.length >= 5 && vin.toUpperCase().includes(q)));
+
+                if (matches.length === 0 && q.length >= 17) {
+                    // Full VIN typed, not in vessel list → proceed anyway
+                    processVin(q);
+                    return;
+                }
+                if (matches.length === 0) {
+                    vinMsg.textContent = `ไม่พบ VIN ที่ลงท้ายด้วย "${q}"`;
+                    vinMsg.classList.remove('hidden');
+                    manualInput.style.borderColor = '#ef4444';
+                    setTimeout(() => { manualInput.style.borderColor = ''; vinMsg.classList.add('hidden'); }, 3000);
+                    return;
+                }
+                if (matches.length === 1) {
+                    processVin(matches[0]);
+                    manualInput.value = '';
+                    return;
+                }
+                // Multiple matches → show pick list in modal
+                content.innerHTML = `
+                    <div class="bg-indigo-600 p-4 text-white text-center font-bold text-lg flex items-center justify-center gap-2">
+                        <i data-lucide="list"></i> พบ ${matches.length} VIN ที่ตรงกัน — เลือกระบุเลข
+                    </div>
+                    <div class="p-3 space-y-2 max-h-72 overflow-y-auto">
+                        ${matches.map(vin => `<button class="vin-pick-btn w-full text-left font-mono text-sm bg-gray-50 hover:bg-indigo-50 border border-gray-200 hover:border-indigo-400 rounded-lg px-4 py-3 transition-colors" data-vin="${vin}">${vin}</button>`).join('')}
+                    </div>
+                    <div class="p-4 bg-gray-50">
+                        <button id="btn-modal-close" class="w-full bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-bold hover:bg-gray-400">ยกเลิก</button>
+                    </div>`;
+                modal.classList.remove('hidden');
+                setTimeout(() => innerModal.classList.remove('scale-95'), 10);
+                lucide.createIcons();
+                div.querySelectorAll('.vin-pick-btn').forEach(btn => {
+                    btn.onclick = () => { modal.classList.add('hidden'); processVin(btn.dataset.vin); manualInput.value = ''; };
+                });
+                const closeBtn2 = div.querySelector('#btn-modal-close');
+                if (closeBtn2) closeBtn2.onclick = () => { innerModal.classList.add('scale-95'); setTimeout(() => modal.classList.add('hidden'), 200); };
+            };
+
+            if (manualSearchBtn) manualSearchBtn.onclick = doManualSearch;
+            if (manualInput) manualInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doManualSearch(); });
 
             switchBtn.onclick = async () => {
                 await stopScanner();
