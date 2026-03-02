@@ -2654,7 +2654,7 @@
             const finalStageHeaders = [...stageOrder, ...otherStages];
 
             // Add Headers
-            ws4_data.push(['VIN', ...finalStageHeaders, 'Port', 'วันที่ตรวจ']);
+            ws4_data.push(['VIN', ...finalStageHeaders, 'Port of Discharging', 'Port (Dest.)', 'วันที่ตรวจ']);
 
             // Add Rows
             Object.entries(byVin).forEach(([vin, stagesData]) => {
@@ -2685,18 +2685,24 @@
                     }
                 });
 
-                // Lookup Port from vessels data
+                // Lookup Port of Discharging and Port (Dest.) from vessels data
+                let podStr = '-';
                 let portStr = '-';
                 for (const v of state.data.vessels) {
                     const cars = v.cars || {};
                     const safeV = vin.replace(/[.#$\[\]\/]/g, '_');
                     const car = cars[safeV] || cars[vin];
-                    if (car) { portStr = car.destinationPort || '-'; break; }
+                    if (car) {
+                        podStr = car.portOfDischarging || '-';
+                        portStr = car.destinationPort || '-';
+                        break;
+                    }
                 }
-                row.push(portStr);
+                row.push(podStr);   // E - Port of Discharging
+                row.push(portStr);  // F - Port (Destination)
 
                 const dateStr = Array.from(allDatesForVin).sort().join(', ');
-                row.push(dateStr);
+                row.push(dateStr);  // G - วันที่ตรวจ
 
                 ws4_data.push(row);
             });
@@ -2722,27 +2728,35 @@
                 }
             });
 
-            // Format 'Port' Header (column E = index finalStageHeaders.length + 1)
-            const portColIdx = finalStageHeaders.length + 1;
+            // Format 'Port of Discharging' Header  (col E = finalStageHeaders.length + 1)
+            const podColIdx = finalStageHeaders.length + 1;
+            const podCellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c: podColIdx });
+            if (ws4[podCellRef]) {
+                ws4[podCellRef].s = { fill: { fgColor: { rgb: "FFD1FAE5" } }, font: { bold: true }, alignment: { horizontal: "center" } }; // Green-tint
+            }
+
+            // Format 'Port (Dest.)' Header (col F = finalStageHeaders.length + 2)
+            const portColIdx = finalStageHeaders.length + 2;
             const portCellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c: portColIdx });
             if (ws4[portCellRef]) {
                 ws4[portCellRef].s = { fill: { fgColor: { rgb: "FFE0E7FF" } }, font: { bold: true }, alignment: { horizontal: "center" } };
             }
 
-            // Format 'วันที่ตรวจ' Header (column F = index finalStageHeaders.length + 2)
-            const dateColIdx = finalStageHeaders.length + 2;
+            // Format 'วันที่ตรวจ' Header (col G = finalStageHeaders.length + 3)
+            const dateColIdx = finalStageHeaders.length + 3;
             const dateCellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c: dateColIdx });
             if (ws4[dateCellRef]) {
                 ws4[dateCellRef].s = { font: { bold: true }, alignment: { horizontal: "center" } };
             }
 
-            // Set column widths so the texts fit nicely
-            ws4['!cols'] = [{ wch: 25 }]; // VIN
+            // Set column widths
+            ws4['!cols'] = [{ wch: 25 }]; // A: VIN
             finalStageHeaders.forEach(() => {
-                ws4['!cols'].push({ wch: 30 }); // Stages
+                ws4['!cols'].push({ wch: 30 }); // Stage columns
             });
-            ws4['!cols'].push({ wch: 12 }); // Port
-            ws4['!cols'].push({ wch: 20 }); // วันที่ตรวจ
+            ws4['!cols'].push({ wch: 18 }); // E: Port of Discharging
+            ws4['!cols'].push({ wch: 14 }); // F: Port (Dest.)
+            ws4['!cols'].push({ wch: 20 }); // G: วันที่ตรวจ
 
             // Append sheets in desired order: ws4 goes first
             XLSX.utils.book_append_sheet(wb, ws4, "สรุปทุกStage(หน้าแรก)");
